@@ -10,6 +10,6 @@
     "Enter 上屏，Esc 清除。",
     "設定：在「設定」視窗修改，改動即時生效，毋須編輯任何檔案。"
   ],
-  "donate_url": "",
+  "donate_url": "https://linktr.ee/kinfx",
   "license": "MIT（引擎 librime 為 BSD-3-Clause）"
 }
