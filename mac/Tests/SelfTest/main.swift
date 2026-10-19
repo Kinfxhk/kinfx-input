@@ -23,7 +23,9 @@ check("round trip", Settings.load(tmp)["page_size"]!, "5")
 let saved = try String(contentsOfFile: tmp, encoding: .utf8)
 check("json keeps types", String(saved.contains("\"page_size\" : 5") && saved.contains("\"association\" : false")), "true")
 check("capture off maps to none", String(Settings.rimeCustom(["phrase_capture": "off"]).contains("\"phrase_mix/capture\": none")), "true")
-check("no numeric tunables exposed", String(Settings.specs.contains { $0.rimeKey.contains("min") }), "false")
+check("no numeric tunables exposed", String(Settings.specs.contains { $0.rimeKey?.contains("min") == true }), "false")
+check("candidate layout default vertical", Settings.defaults()["candidate_layout"]!, "vertical")
+check("layout not sent to rime", String(Settings.rimeCustom(Settings.defaults()).contains("layout")), "false")
 try? FileManager.default.removeItem(atPath: tmp)
 
 // Key mapping.

@@ -15,7 +15,19 @@ final class KINFXInputController: IMKInputController {
 
   @objc(recognizedEvents:)
   override func recognizedEvents(_ sender: Any!) -> Int {
-    Int(NSEvent.EventTypeMask.keyDown.rawValue | NSEvent.EventTypeMask.flagsChanged.rawValue)
+    Trace.log("recognizedEvents")
+    return Int(NSEvent.EventTypeMask.keyDown.rawValue | NSEvent.EventTypeMask.flagsChanged.rawValue)
+  }
+
+  override init!(server: IMKServer!, delegate: Any!, client inputClient: Any!) {
+    super.init(server: server, delegate: delegate, client: inputClient)
+    Trace.log("controller init client=\(String(describing: inputClient))")
+  }
+
+  // IMK falls back to this when handleEvent:client: is not used for a client.
+  override func inputText(_ string: String!, key keyCode: Int, modifiers flags: Int, client sender: Any!) -> Bool {
+    Trace.log("inputText:key: [\(string ?? "")] key=\(keyCode) flags=\(String(flags, radix: 16))")
+    return false
   }
 
   private static func mods(_ f: NSEvent.ModifierFlags) -> RimeKeys.Mods {
@@ -69,7 +81,7 @@ final class KINFXInputController: IMKInputController {
     } else {
       var rect = NSRect.zero
       client.attributes(forCharacterIndex: 0, lineHeightRectangle: &rect)
-      AppDelegate.panel.show(view, below: rect)
+      AppDelegate.panel.show(view, below: rect, vertical: engine.settings["candidate_layout"] != "horizontal")
     }
   }
 

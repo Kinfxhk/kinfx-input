@@ -29,7 +29,7 @@
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>InputMethodConnectionName</key>
-	<string>hk.kinfx.inputmethod.KINFXInput_Connection</string>
+	<string>KINFXInput_Connection</string>
 	<key>InputMethodServerControllerClass</key>
 	<string>KINFXInputController</string>
 	<key>InputMethodServerDelegateClass</key>
