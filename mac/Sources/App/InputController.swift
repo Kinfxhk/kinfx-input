@@ -119,11 +119,18 @@ final class KINFXInputController: IMKInputController {
 
   override func menu() -> NSMenu! {
     let m = NSMenu()
-    let item = NSMenuItem(title: "KINFX Input 設定…", action: #selector(openSettings(_:)), keyEquivalent: "")
-    item.target = self
-    m.addItem(item)
+    for (title, sel) in [("KINFX Input 設定…", #selector(openSettings(_:))), ("說明", #selector(openHelp(_:))),
+                         ("關於 KINFX Input", #selector(openAbout(_:))), ("捐款…", #selector(openDonate(_:)))] {
+      let item = NSMenuItem(title: title, action: sel, keyEquivalent: "")
+      item.target = self
+      m.addItem(item)
+    }
     return m
   }
+
+  @objc func openHelp(_ sender: Any?) { NSApp.activate(ignoringOtherApps: true); AppInfo.showHelp() }
+  @objc func openAbout(_ sender: Any?) { NSApp.activate(ignoringOtherApps: true); AppInfo.showAbout() }
+  @objc func openDonate(_ sender: Any?) { AppInfo.openDonate() }
 
   @objc func openSettings(_ sender: Any?) {
     (NSApp.delegate as? AppDelegate)?.showSettings()

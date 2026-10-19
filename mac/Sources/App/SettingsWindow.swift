@@ -34,7 +34,13 @@ final class SettingsWindow: NSWindow {
 
     status.textColor = .secondaryLabelColor
     status.stringValue = "變更即時生效。"
-    let stack = NSStackView(views: [grid, status])
+    let buttons = NSStackView(views: [
+      NSButton(title: "說明", target: self, action: #selector(help)),
+      NSButton(title: "關於", target: self, action: #selector(about)),
+      NSButton(title: "捐款", target: self, action: #selector(donate)),
+    ])
+    buttons.spacing = 8
+    let stack = NSStackView(views: [grid, status, buttons])
     stack.orientation = .vertical
     stack.alignment = .leading
     stack.spacing = 14
@@ -43,6 +49,10 @@ final class SettingsWindow: NSWindow {
     setContentSize(stack.fittingSize)
     center()
   }
+
+  @objc private func help() { AppInfo.showHelp() }
+  @objc private func about() { AppInfo.showAbout() }
+  @objc private func donate() { AppInfo.openDonate() }
 
   @objc private func changed(_ sender: NSPopUpButton) {
     var s: [String: String] = [:]
