@@ -70,6 +70,7 @@ app)
   cp -L "$R/dist/lib/librime.1.dylib" "$APP/Contents/Frameworks/librime.1.dylib"
   cp "$R/dist/lib/rime-plugins/librime-lua.dylib" "$APP/Contents/Frameworks/rime-plugins/"
   cp -R "$B/data" "$APP/Contents/Resources/data"
+  cp "$ROOT/app-info.json" "$APP/Contents/Resources/app-info.json"
   cp Resources/Info.plist "$APP/Contents/Info.plist"
   swift tools/make-icon.swift "$APP/Contents/Resources/KINFX.tiff"
   ENT=Resources/KINFXInput-$FLAVOR.entitlements
@@ -83,6 +84,26 @@ app)
   codesign --verify --deep --strict "$APP"
   echo "built: $APP ($FLAVOR, signed with $SIGN)"
   ;;
+pkg)
+  # Direct install package: per-user ~/Library/Input Methods, no sudo.
+  # Unsigned unless SIGN_ID (Developer ID Application) and PKG_SIGN_ID (Developer ID Installer) are set;
+  # notarise with NOTARY_PROFILE (xcrun notarytool store-credentials name).
+  bash "$PWD/build.sh" app direct
+  VER=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
+  P=$B/pkgroot; rm -rf "$P" && mkdir -p "$P" && cp -R "$B/KINFX Input.app" "$P/"
+  OUT=$B/KINFX-Input-$VER-macOS.pkg
+  # Component installs relative to the chosen domain; distribution.xml allows only the
+  # current user's home, so the app lands in ~/Library/Input Methods without admin.
+  pkgbuild --root "$P" --identifier hk.kinfx.inputmethod.KINFXInput.pkg --version "$VER"     --install-location "Library/Input Methods" --scripts Resources/pkg-scripts "$B/KINFXInput-component.pkg"
+  PRODOPTS=(--distribution Resources/distribution.xml --package-path "$B")
+  [[ -n ${PKG_SIGN_ID:-} ]] && PRODOPTS+=(--sign "$PKG_SIGN_ID")
+  productbuild "${PRODOPTS[@]}" "$OUT"
+  if [[ -n ${NOTARY_PROFILE:-} ]]; then
+    xcrun notarytool submit "$OUT" --keychain-profile "$NOTARY_PROFILE" --wait
+    xcrun stapler staple "$OUT"
+  fi
+  echo "built: $OUT (signed: ${PKG_SIGN_ID:-no}, notarised: ${NOTARY_PROFILE:+yes})"
+  ;;
 *)
-  echo "usage: $0 selftest | app [store|direct]" >&2; exit 2 ;;
+  echo "usage: $0 selftest | app [store|direct|dev] | pkg" >&2; exit 2 ;;
 esac

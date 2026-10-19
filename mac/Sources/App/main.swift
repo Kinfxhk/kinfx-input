@@ -1,5 +1,6 @@
 import Cocoa
 import InputMethodKit
+import Carbon
 
 // Input method entry. The process is launched by the system when the user picks
 // KINFX Input; started by hand with --settings it opens only the settings window.
@@ -10,6 +11,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   var settingsWindow: SettingsWindow?
 
   func applicationDidFinishLaunching(_ n: Notification) {
+    if CommandLine.arguments.contains("--register") {  // pkg postinstall
+      let url = Bundle.main.bundleURL as CFURL
+      print("register", TISRegisterInputSource(url))
+      let f = [kTISPropertyInputSourceID as String: "hk.kinfx.inputmethod.KINFXInput.Hant"] as CFDictionary
+      if let s = (TISCreateInputSourceList(f, true)?.takeRetainedValue() as? [TISInputSource])?.first {
+        print("enable", TISEnableInputSource(s))
+      }
+      exit(0)
+    }
     let fm = FileManager.default
     let shared = Bundle.main.resourcePath! + "/data"
     // Sandboxed: this resolves inside the app container. Direct build: ~/Library/Application Support.

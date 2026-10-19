@@ -1,0 +1,22 @@
+#!/bin/bash
+# KINFX Input pkg postinstall. The package installs into the current user's home
+# (~/Library/Input Methods, no administrator password), so this runs as that user.
+# It registers and enables the input method; the user never edits a file.
+set -u
+APP="$HOME/Library/Input Methods/KINFX Input.app"
+ID=hk.kinfx.inputmethod.KINFXInput
+MODE=$ID.Hant
+pkill -f "Input Methods/KINFX Input.app/Contents/MacOS/KINFXInput" || true
+"$APP/Contents/MacOS/KINFXInput" --register || true
+# macOS 26+ ignores TISEnableInputSource for builds without a Developer ID: add the
+# two entries a manual "+" in System Settings would add, once.
+for pair in "com.apple.HIToolbox AppleEnabledInputSources" "com.apple.inputsources AppleEnabledThirdPartyInputSources"; do
+  read -r dom key <<<"$pair"
+  if ! defaults read "$dom" "$key" 2>/dev/null | grep -q "$MODE"; then
+    defaults write "$dom" "$key" -array-add \
+      "<dict><key>Bundle ID</key><string>$ID</string><key>InputSourceKind</key><string>Keyboard Input Method</string></dict>" \
+      "<dict><key>Bundle ID</key><string>$ID</string><key>Input Mode</key><string>$MODE</string><key>InputSourceKind</key><string>Input Mode</string></dict>"
+  fi
+done
+killall TextInputMenuAgent 2>/dev/null || true
+exit 0
