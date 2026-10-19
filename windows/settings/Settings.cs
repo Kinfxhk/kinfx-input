@@ -79,10 +79,10 @@ static class KxSettings {
     buttons.Controls.Add(btn("說明", () => MessageBox.Show(f, help, "KINFX Input 說明")));
     buttons.Controls.Add(btn("關於", () => MessageBox.Show(f, (string)info["about"] + "\n\n授權：" + Str(info.ContainsKey("license") ? info["license"] : ""),
                                                           "KINFX Input " + Str(info["version"]))));
-    buttons.Controls.Add(btn("捐款", () => {
+    buttons.Controls.Add(btn("支持", () => {
       string url = Str(info.ContainsKey("donate_url") ? info["donate_url"] : "").Trim();
       if (url.StartsWith("https://") || url.StartsWith("http://")) Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
-      else MessageBox.Show(f, "捐款連結尚未設定。", "捐款");
+      else MessageBox.Show(f, "支持連結尚未設定。", "支持");
     }));
 
     var stack = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false };

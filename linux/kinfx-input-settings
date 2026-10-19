@@ -42,7 +42,7 @@ class Win(Gtk.Window):
             grid.attach(c, 1, r, 1, 1)
         self.status = Gtk.Label(label="變更即時生效。", xalign=0)
         btns = Gtk.Box(spacing=8)
-        for text, fn in (("說明", self.help), ("關於", self.about), ("捐款", self.donate)):
+        for text, fn in (("說明", self.help), ("關於", self.about), ("支持", self.donate)):
             b = Gtk.Button(label=text)
             b.connect("clicked", fn)
             btns.pack_start(b, False, False, 0)
@@ -71,7 +71,7 @@ class Win(Gtk.Window):
         if url.startswith(("https://", "http://")):
             Gio.AppInfo.launch_default_for_uri(url, None)
         else:
-            info_dialog(self, "捐款", "捐款連結尚未設定。")
+            info_dialog(self, "支持", "支持連結尚未設定。")
 
 
 if __name__ == "__main__":
