@@ -30,7 +30,7 @@ final class KINFXInputController: IMKInputController {
 
   @objc(handleEvent:client:)
   override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
-    Trace.log("handle type=\(event?.type.rawValue ?? 0) key=\(event?.keyCode ?? 0) chars=\(event?.characters ?? "")")
+    Trace.log("handle type=\(event?.type.rawValue ?? 0) key=\(event?.keyCode ?? 0) chars=\(event?.characters ?? "") flags=\(String(event?.modifierFlags.rawValue ?? 0, radix: 16))")
     guard let event = event, let client = sender as? IMKTextInput, ensureSession() else { return false }
     let mods = Self.mods(event.modifierFlags)
     var handled = false
@@ -38,21 +38,25 @@ final class KINFXInputController: IMKInputController {
     case .flagsChanged:
       defer { lastMods = mods }
       guard mods != lastMods, let (k, m) = RimeKeys.flagsChanged(keyCode: event.keyCode, mods: mods) else { return false }
+      Trace.log("  flags k=\(String(k, radix: 16)) m=\(String(m, radix: 16))")
       handled = engine.key(session, k, m)
     case .keyDown:
       guard let (k, m) = RimeKeys.keyDown(keyCode: event.keyCode, chars: event.characters,
                                           bare: event.charactersIgnoringModifiers, mods: mods) else { return false }
+      Trace.log("  key k=\(String(k, radix: 16)) m=\(String(m, radix: 16))")
       handled = engine.key(session, k, m)
     default:
       return false
     }
     update(client)
+    Trace.log("  -> sent rime handled=\(handled)")
     return handled
   }
 
   // Push commit text, preedit and candidates to the client after every key.
   private func update(_ client: IMKTextInput) {
     if let text = engine.takeCommit(session) {
+      Trace.log("  commit [\(text)]")
       client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
     }
     let view = engine.view(session)
