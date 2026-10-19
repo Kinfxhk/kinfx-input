@@ -5,7 +5,7 @@
 cd ~/kinfx-input-dev/w/mac
 T=~/.hermes/cache/scratch/unwire50/mac_type_str
 L="$HOME/Library/Containers/hk.kinfx.inputmethod.KINFXInput/Data/Library/Application Support/KINFX Input/log"
-F=~/kinfx-input-dev/rk3.txt
+F=~/kinfx-input-dev/rk3-$(date +%H%M%S).txt  # new file per run: truncating an open doc breaks TextEdit autosave
 front() { lsappinfo info -only name "$(lsappinfo front)" 2>/dev/null | awk -F'"' 'NR==1{print $2}'; }
 # per-document input source: TIS "current" can say KINFX while TextEdit's document still uses
 # OpenVanilla, so judge by the last IMK server that logged "Activate Server".

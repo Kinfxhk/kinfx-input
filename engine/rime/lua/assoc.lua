@@ -296,13 +296,18 @@ local function handle_assoc(env, ctx, repr)
     return kAccepted
   end
 
-  -- Esc / BackSpace / Enter close without deleting. A Left Shift tap closes
+  -- Esc / BackSpace close without deleting. A Left Shift tap closes
   -- it too (english_mix, before ascii_composer); a Shift press alone must not,
   -- or Shift+digit could never pick.
-  if repr == "Escape" or repr == "BackSpace" or repr == "Return"
-     or repr == "KP_Enter" then
+  if repr == "Escape" or repr == "BackSpace" then
     close_assoc(ctx)
     return kAccepted
+  end
+  -- Enter closes and still reaches the app as a newline (kinfx-input real keys:
+  -- vd1 Return iPhone must give two lines).
+  if repr == "Return" or repr == "KP_Enter" then
+    close_assoc(ctx)
+    return kNoop
   end
 
   -- Letters close and start a new code.
