@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<component>
+  <name>hk.kinfx.Input</name>
+  <description>KINFX Input</description>
+  <exec>/usr/lib/kinfx-input/kinfx-ibus --ibus</exec>
+  <version>@VERSION@</version>
+  <license>MIT</license>
+  <homepage>https://linktr.ee/kinfx</homepage>
+  <textdomain>kinfx-input</textdomain>
+  <engines>
+    <engine>
+      <name>kinfx</name>
+      <language>zh_TW</language>
+      <license>MIT</license>
+      <longname>KINFX Input</longname>
+      <description>速成中英混打</description>
+      <icon>input-keyboard</icon>
+      <layout>us</layout>
+      <symbol>速</symbol>
+      <rank>80</rank>
+      <setup>/usr/bin/kinfx-input-settings</setup>
+    </engine>
+  </engines>
+</component>

@@ -1,0 +1,8 @@
+#!/bin/sh
+# Make ibus-daemon see the new component; the user then adds "KINFX Input" once
+# in Settings > Keyboard > Input Sources (Chinese (Taiwan)). No file to edit.
+set -e
+if [ "$1" = configure ]; then
+  ibus write-cache --system >/dev/null 2>&1 || true
+fi
+exit 0

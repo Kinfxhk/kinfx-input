@@ -1,0 +1,95 @@
+#!/usr/bin/python3
+"""KINFX Input IBus engine. Started by ibus-daemon from kinfx-input.xml (--ibus)."""
+import os
+import sys
+
+import gi
+gi.require_version("IBus", "1.0")
+from gi.repository import GLib, GObject, IBus  # noqa: E402
+
+sys.path.insert(0, os.environ.get("KX_LIB", "/usr/lib/kinfx-input"))
+import kxcore  # noqa: E402
+
+# IBus modifier bits are the X11 ones Rime expects; release is 1 << 30 in both.
+MASK = (IBus.ModifierType.SHIFT_MASK | IBus.ModifierType.LOCK_MASK | IBus.ModifierType.CONTROL_MASK
+        | IBus.ModifierType.MOD1_MASK | IBus.ModifierType.SUPER_MASK | IBus.ModifierType.RELEASE_MASK)
+
+ENGINE = kxcore.Engine()
+
+
+class KxEngine(IBus.Engine):
+    __gtype_name__ = "KxEngine"
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.sess = 0
+        self.table = IBus.LookupTable.new(9, 0, False, False)
+
+    def _session(self):
+        if not ENGINE.alive(self.sess):
+            self.sess = ENGINE.session()
+        return self.sess
+
+    def do_process_key_event(self, keyval, keycode, state):
+        if not self._session():
+            return False
+        handled = ENGINE.key(self.sess, keyval, int(state) & int(MASK))
+        self._update()
+        return handled
+
+    def _update(self):
+        text = ENGINE.commit(self.sess)
+        if text:
+            self.commit_text(IBus.Text.new_from_string(text))
+        pre, cur, page, cands = ENGINE.view(self.sess)
+        self.update_preedit_text(IBus.Text.new_from_string(pre), cur, bool(pre))
+        if not cands:
+            self.hide_lookup_table()
+            return
+        horizontal = ENGINE.settings.get("candidate_layout") == "horizontal"
+        t = self.table
+        t.clear()
+        t.set_page_size(max(page, len(cands)))
+        t.set_orientation(IBus.Orientation.HORIZONTAL if horizontal else IBus.Orientation.VERTICAL)
+        for i, (c, comment) in enumerate(cands):
+            t.append_candidate(IBus.Text.new_from_string(c + (" " + comment if comment else "")))
+            t.set_label(i, IBus.Text.new_from_string("%d." % ((i + 1) % 10)))
+        t.set_cursor_visible(False)
+        self.update_lookup_table(t, True)
+
+    def do_focus_in(self):
+        ENGINE.reload_if_changed()
+
+    def do_focus_out(self):
+        if self.sess:
+            ENGINE.lib.kx_clear(self.sess)
+        self.update_preedit_text(IBus.Text.new_from_string(""), 0, False)
+        self.hide_lookup_table()
+
+    def do_reset(self):
+        self.do_focus_out()
+
+    def do_candidate_clicked(self, index, button, state):
+        # Same as pressing the label digit.
+        if self._session():
+            ENGINE.key(self.sess, ord(str((index + 1) % 10)), 0)
+            self._update()
+
+
+def main():
+    IBus.init()
+    bus = IBus.Bus()
+    factory = IBus.Factory.new(bus.get_connection())
+    factory.add_engine("kinfx", GObject.type_from_name("KxEngine"))
+    if "--ibus" in sys.argv:
+        bus.request_name("hk.kinfx.Input", 0)
+    # After request_name: ibus-daemon times out if the first Rime deploy runs before it.
+    # CreateEngine waits in the queue until loop.run().
+    ENGINE.start()
+    bus.connect("disconnected", lambda *_: loop.quit())
+    loop = GLib.MainLoop()
+    loop.run()
+
+
+if __name__ == "__main__":
+    main()
