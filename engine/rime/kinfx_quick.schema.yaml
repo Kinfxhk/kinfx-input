@@ -1,0 +1,273 @@
+# encoding: utf-8
+# KINFX 中英混打輸入法 — 速成（Sucheng / Microsoft Quick–aligned）
+# Based on rime-quick ideas (LGPL-3.0 upstream); this schema file is MIT (project LICENSE).
+# Dictionary data: see kinfx_quick.dict.yaml + NOTICE.
+
+schema:
+  schema_id: kinfx_quick
+  name: KINFX 中英混打輸入法 · 速成
+  version: "0.5.10"
+  author:
+    - KINFX
+    - 速成規則／碼表源流見 NOTICE（rime-quick / rime-cangjie）
+  description: |
+    KINFX 中英混打輸入法（速成）。schema_id 係 kinfx_quick。
+    港式／Windows 微軟速成對齊：倉頡字根鍵盤＋只取首尾二碼。
+    候選預設每頁 9 個、選字鍵 1–9、直列。空白＝翻頁；Enter／1–9＝選焦點。
+    Tab 展開多欄；多頁碼有「常用熱門」環頁。見 docs/WIN_QUICK_SELECT.md。
+    硬需求：中英混打預設＝全程零切換（大寫拉丁／email／URL 直出）。
+    可選：Shift inline_ascii 或 ascii_mode（見 docs／custom 例）。
+    佈局變體見 docs/LAYOUTS.md（win_quick = 預設）。排序見 docs/WIN_QUICK_RANK.md。
+    v0.4：候選次序＝Windows 11 微軟速成實測全表（唔止頭 9）。第三碼照 Windows 頂字；
+    常用詞前綴（ofc→無錯）同英詞（gmai→Gmail）用原生詞表，唔再喺 Lua 載入大詞庫。
+    見 docs/WIN_QUICK_RANK.md、docs/PHRASE_MIX.md。
+  dependencies:
+    - kinfx_phrase
+    - kinfx_en
+    - kinfx_names
+    - kinfx_assoc
+
+switches:
+  - name: ascii_mode
+    reset: 0
+    states: [ 中文, 西文 ]
+    abbrev: [ 中, Ａ ]
+  - name: full_shape
+    states: [ 半角, 全角 ]
+  - name: simplification
+    states: [ 漢字, 汉字 ]
+  - name: ascii_punct
+    states: [ 。，, ．， ]
+
+engine:
+  processors:
+    # v0.5 英文：仲係英文詞開頭就延遲頂字（照 v0.4.1 計好中文結果先擺住）；
+    # 空白／標點上屏安全英文詞，左 Shift 撳一下上屏字母。要喺 ascii_composer 之前。
+    - lua_processor@english_keys
+    - ascii_composer
+    - recognizer
+    # 喺 key_binder 之前：Tab 展開；Page_Up/Down 先處理熱門環頁，其餘交返 selector。
+    - lua_processor@win_quick_keys
+    - key_binder
+    # 第三碼預設照 Windows 頂字；常用詞前綴／英文詞前綴先留低組詞。
+    - lua_processor@phrase_mix_keys
+    - speller
+    # 揀完單字開聯想詞；再撳鍵處理聯想選單。要喺 punctuator 之前，
+    # 否則 Shift+digit 會被 punctuator 當標點上屏。
+    - lua_processor@assoc_keys
+    - punctuator
+    - selector
+    - navigator
+    - express_editor
+  segmentors:
+    - ascii_segmentor
+    - matcher
+    - abc_segmentor
+    # 長度 ≥3 加 kinfx_phrase、≥4 加 kinfx_en 標籤；兩碼頭頁唔會出詞。
+    - lua_segmentor@phrase_mix_seg
+    - punct_segmentor
+    - fallback_segmentor
+  translators:
+    - punct_translator
+    - table_translator
+    - table_translator@phrase
+    - table_translator@english
+    - lua_translator@assoc_translator
+    - reverse_lookup_translator
+  filters:
+    - simplifier
+    - uniquifier
+    # 英文延遲頂字時喺游標後提示（␣word／⇧letters），候選唔改。
+    - lua_filter@english_hint
+    # 正常頁原序通過（碼表已釘 Win 頭 9）。熱門頁／Tab 展開先至改顯示。
+    - lua_filter@win_quick_menu
+
+# 混打預設：唔靠切 ascii_mode。
+# - 大寫拉丁／email／URL → recognizer 直出（零切換；例「今日用 API 測試」）
+# - 可選 Shift_L = inline_ascii（臨時西文）；若唔要可喺 custom 改 noop
+# - 持久西文：開關 ascii_mode（Control+Shift+2）或 Fcitx5 切鍵盤
+# 注意：Fcitx5 預設 LShift 可能搶走 rime inline_ascii（見 README／desktop-verify）
+ascii_composer:
+  good_old_caps_lock: true
+  switch_key:
+    Caps_Lock: clear
+    Shift_L: inline_ascii
+    Shift_R: commit_text
+    Control_L: noop
+    Control_R: noop
+
+speller:
+  alphabet: zyxwvutsrqponmlkjihgfedcba
+  # 只用空白做分隔：「;」「'」照 Windows 頂字再出標點（vd; → 好；）。上游預設 " ;'"
+  delimiter: " "
+  max_code_length: 2
+  auto_select: false
+
+translator:
+  dictionary: kinfx_quick
+  # Windows 速成冇預測同造句：打 h 只出 竹丿，唔會補全成 hi 嘅字。
+  enable_completion: false
+  enable_sentence: false
+  # 學頻會改 Windows 次序；常用熱門只走左鍵環頁。
+  enable_user_dict: false
+  encode_commit_history: false
+  max_phrase_length: 5
+  preedit_format:
+    - "xlit|abcdefghijklmnopqrstuvwxyz;'|日月金木水火土竹戈十大中一弓人心手口尸廿山女田難卜符··|"
+  comment_format:
+    - "xlit|abcdefghijklmnopqrstuvwxyz~|日月金木水火土竹戈十大中一弓人心手口尸廿山女田難卜符～|"
+  disable_user_dict_for_patterns:
+    - "^z.*$"
+
+# 詞庫前綴（原生 table_translator，編譯成 .table.bin，唔使 Lua 載入）。
+# capture: hot = 只有 kinfx_capture.txt 嘅常用詞前綴先留住第三碼；
+#          all = 任何詞前綴都留（較少頂字，同 Windows 差多啲）。
+phrase_mix:
+  enable: true
+  capture: hot
+
+phrase:
+  dictionary: kinfx_quick_phrase
+  tag: kinfx_phrase
+  enable_completion: true
+  enable_sentence: false
+  enable_user_dict: false
+  initial_quality: 2
+  comment_format:
+    - "xform/^.*$//"
+
+# 英詞（lexicon/en，SCOWL）。smart 模式：延遲頂字＋空白上屏＋左 Shift。
+# shift = v0.4.1（+word 留住詞＋inline_ascii）；off = 唔處理英文。
+english:
+  enable: true
+  mode: smart
+  # 冇打字撳左 Shift：noop＝乜都唔做（預設，避免誤觸入咗底線英文模式）｜ascii＝librime 臨時英文
+  empty_shift: noop
+  # 唔喺詞表嘅英文（公司名、識別字）：英文開頭夠 hold_min 個字母之後，再留多 hold_extra 個；
+  # 7 個字母或以上（unknown_space_min）撳空白上屏，其餘撳左 Shift。英文詞嘅開頭（const、async）
+  # 5 個字母起都可以撳空白，6 個字母除外（三對速成碼，空白係翻頁）。0＝關。
+  hold_min: 4
+  hold_extra: 8
+  unknown_space_min: 7
+  # v0.5.4 左 Shift 補救：開頭 rescue_min 個字母係英文／品牌名開頭，之後斷咗都再留 rescue_extra
+  # 個字母，撳左 Shift 就照字母上屏（adsense、zdrav）。空白、數字、其他鍵照 Windows 出中文，
+  # 只係頂字遲啲先上屏。0＝關（v0.5.3）。品牌名表：kinfx_names（Wikidata，約 5 千個）。
+  rescue_min: 2
+  rescue_extra: 8
+  # 打緊字撳 Ctrl+C／V／X：clear＝收起輸入（擺住嘅中文照上屏，字母唔要），快捷鍵交返程式；
+  # keep＝v0.5.2（Ctrl+V 翻頁、Ctrl+C 冇反應）
+  clipboard: clear
+  # 英文詞後面打「-」：word＝英文詞加半形 -，下一段照打（tool-calling）｜off＝v0.5.2
+  hyphen: word
+  # 預編輯顯示：letters＝顯示打咗嘅字母（of、hello）｜radicals＝速成字根（人火，v0.5.2）
+  preedit: letters
+  space: safe          # safe（逐詞安全表）| long（只限 5 字母以上）| off
+  commit_key: Shift_L  # Linux：用 scripts/linux-free-left-shift.sh 解除 Fcitx5 熱鍵；唔建議 Caps_Lock
+  dictionary: kinfx_en
+  tag: kinfx_en
+  enable_completion: true
+  enable_sentence: false
+  enable_user_dict: false
+  initial_quality: 1
+  comment_format:
+    - "xform/^.*$//"
+
+# 聯想詞（上屏一個中文字後出後續詞，同 Windows 聯想）。v0.5。
+association:
+  enable: true
+  max: 36
+  # 揀字後第一下空白：type＝關聯想再打空格（中英混打順）｜page＝Windows（翻聯想頁、吞咗）
+  space: type
+
+assoc_translator:
+  tag: kinfx_assoc
+
+# v0.5.4：唔再將拼音反查混入速成候選（Windows 速成冇；`j` 原本出 十|就|將…，
+# 空白會翻去拼音頁）。拼音反查照用 ` 開頭。要還原：custom 加 abc_segmentor/extra_tags: [reverse_lookup]。
+
+reverse_lookup:
+  dictionary: luna_pinyin
+  prism: luna_quanpin
+  prefix: "`"
+  suffix: "'"
+  tips: 〔拼音反查〕
+  preedit_format:
+    - xform/([nl])v/$1ü/
+    - xform/([nl])ue/$1üe/
+    - xform/([jqxy])v/$1u/
+
+# 產品預設：每頁 9 個，選字鍵 1–9（librime 預設數字鍵；0 唔係本頁選字）。
+# 硬需求：所有前端（Fcitx5 classicui、Squirrel、Weasel）跟 schema，唔另設 5。
+# 使用者要改先用 kinfx_quick.custom.yaml 的 menu/page_size（見 examples）。
+menu:
+  page_size: 9
+  # 環頁由熱門頁負責，唔好開 native cycle（會跳過常用熱門直返第 1 頁）。
+  page_down_cycle: false
+
+punctuator:
+  import_preset: default
+  # 「/」直出半形 /（寫 code、網址、日期唔使揀）；「、」改由「\」一粒鍵直出。
+  # 上游預設：/ 同 \ 都係選單，「、」排第一。要返舊樣：custom 刪走呢兩行。
+  # 寫 code：Ctrl+. 切 ASCII 標點（同 Windows 一樣），所有符號變半形直出；再撳返中文標點。
+  # v0.5.3：' " _ 照 Windows 11 微軟速成實測出半形（寫 code、英文縮寫唔使切）；
+  # ，。：「」等其他中文標點照舊全形。要返 ‘’“”——：custom 刪走呢三行。
+  half_shape:
+    "/": "/"
+    "\\": "、"
+    "'": "'"
+    "\"": "\""
+    "_": "_"
+    # v0.5.9：Shift+4/5/3/2 出半形 $ % # @ 本身（$ 原本係選單，Shift+4 再打 48 變 £8）。
+    "$": "$"
+    "%": "%"
+    "#": "#"
+    "@": "@"
+  # v0.5.9：數字後面嘅 . : , ' 留半形（20,000、3.14、12:30）；連撳兩下先出中文標點。
+  # Weasel 0.17.4 一向係咁；librime 1.16（macOS／Linux）預設只有 . :，20,000 變 20，000。
+  digit_separators: ".:,'"
+
+# 有候選窗：空白／右＝下一頁，左＝上一頁。無候選窗唔命中，空白仍係確認上屏
+# （混打 preedit「好API」按空白會 commit）。Flex 關翻頁：win_quick/space_pages: false。
+key_binder:
+  import_preset: default
+  bindings:
+    - { when: has_menu, accept: space, send: Page_Down }
+    - { when: has_menu, accept: Right, send: Page_Down }
+    - { when: has_menu, accept: KP_Right, send: Page_Down }
+    - { when: has_menu, accept: Left, send: Page_Up }
+    - { when: has_menu, accept: KP_Left, send: Page_Up }
+    - { when: always, accept: Control+Shift+2, toggle: ascii_mode }
+    # Ctrl+. ＝中文／英文標點（Windows 微軟速成同一粒鍵）。狀態會記住。
+    - { when: always, accept: Control+period, toggle: ascii_punct }
+
+# express_editor 預設 Return = commit_raw_input（會上屏「vd」）。
+# confirm = 揀焦點候選；無候選窗時退回 Commit()，混打 Enter 仍上屏成文。
+editor:
+  bindings:
+    Return: confirm
+    KP_Enter: confirm
+
+# 直列。Fcitx5 classicui 唔讀 style；install-linux.sh 寫 Vertical Candidate List。
+# Squirrel／Weasel／ibus-rime 讀 horizontal: false。
+style:
+  horizontal: false
+  inline_preedit: true
+
+# 選字 UX。改預設見 schemas/examples/kinfx_quick.custom.yaml.example。
+win_quick:
+  space_pages: true
+  hot_page: true
+  tab_expand: true
+  expand_columns: 4
+  vertical: true
+
+recognizer:
+  import_preset: default
+  patterns:
+    # 零切換混打主路徑：大寫開頭英詞、email、URL
+    email: "^[A-Za-z][-_.0-9A-Za-z]*@.*$"
+    # v0.5.9：單碼後面即刻大楷（iPhone、eSIM、xAI）成串留拉丁，唔再頂成 戈Phone。
+    uppercase: "^[a-z][A-Z][-_+.'0-9A-Za-z]*$|[A-Z][-_+.'0-9A-Za-z]*$"
+    # v0.5.10：英文詞中間嘅「-」後面再有字母（bait-and-switch），成個詞留拉丁。
+    url: "^(www[.]|https?:|ftp[.:]|mailto:|file:).*$|[a-z]+[.].+$|^[a-z]+-[A-Za-z0-9][-.A-Za-z0-9]*$"
+    reverse_lookup: "`[a-z]*'?$"

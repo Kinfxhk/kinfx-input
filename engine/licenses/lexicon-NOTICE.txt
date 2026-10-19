@@ -1,0 +1,69 @@
+KINFX IME lexicon — third-party data, not MIT
+
+The MIT license at the repository root covers original code and documentation.
+Files under lexicon/ keep the upstream licenses below. Do not relicense them
+as MIT. rime-ice (GPL-3.0) is not vendored.
+
+## lexicon/hk — Cantonese words and 4-character phrases
+
+Source of the words: essay-cantonese.txt from rime-cantonese
+(https://github.com/rime/rime-cantonese), Debian package rime-data-jyut6ping3.
+
+Copyright: GONG Chen, Ayaka Mikazuki, chaaklau, LeiMaau, laubonghaudoi,
+tanxpyox, William915, szc126, Bing Jeung, Henry Chan, graphemecluster,
+and other rime-cantonese contributors.
+License: CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+
+Changes: scripts/gen_quick_phrases.py keeps multi-character entries inside a
+weight floor, drops anything whose characters are missing from the Sucheng
+table, and replaces Jyutping with one quick code per word.
+
+Sucheng codes are derived from schemas/kinfx-quick/kinfx_quick.dict.yaml,
+itself built from rime-cangjie / rime-quick (LGPL-3.0). The code column is
+therefore under LGPL-3.0 as well. See licenses/rime-quick-LGPL-3.0.txt and
+the root NOTICE. CC BY 4.0 still applies to the word selection.
+
+  kinfx_hk_words.dict.yaml    — 2-, 3-, and 5-character entries
+  kinfx_hk_idioms.dict.yaml   — 4-character band (chengyu and other set phrases)
+  kinfx_quick_phrase.dict.yaml — imports the two tables; no preset vocabulary
+  kinfx_assoc.dict.yaml       — association suffixes 聯想 (2-4 char words,
+                                grouped by first character; scripts/gen_assoc.py)
+
+There is no Cartesian expansion of character readings. A character that has
+several quick codes contributes only its highest-weight code.
+
+## lexicon/en — English completion (M5 / melt_eng channel)
+
+Word list: SCOWL, as shipped by Debian wamerican (/usr/share/dict/words).
+
+Copyright 2000-2011 Kevin Atkinson <kevina@users.sourceforge.net>
+and the copyrights named in the SCOWL README.
+
+Permission to use, copy, modify, distribute and sell these word lists, the
+associated scripts, the output created from the scripts, and its documentation
+for any purpose is hereby granted without fee, provided that the above
+copyright notice appears in all copies and that both that copyright notice
+and this permission notice appear in supporting documentation. Kevin Atkinson
+makes no representations about the suitability of this array for any purpose.
+It is provided "as is" without express or implied warranty.
+
+Source: http://wordlist.sourceforge.net/
+
+lexicon/en/extras.tsv adds Gmail and GMAIL (completion targets; Gmail is a
+trademark of Google LLC) plus scriptwriting and voiceover. Those rows are
+project data. They do not change the SCOWL license of the rest of
+kinfx_en.dict.yaml.
+
+lexicon/en/kinfx_names.dict.yaml (v0.5.4) lists brand, product and website
+names from Wikidata English labels and aliases, produced by scripts/gen_names.py.
+Wikidata data is CC0 1.0 (https://creativecommons.org/publicdomain/zero/1.0/).
+The names are trademarks of their owners and appear only as typing targets.
+
+lexicon/en/kinfx_en_unsafe.txt is a derived subset (English words Space must
+not commit) produced by scripts/gen_english_space.py from the SCOWL list and
+essay-cantonese.txt weights. Same SCOWL terms as kinfx_en.dict.yaml; the
+selection is project data.
+
+Runtime policy (schemas/lua/melt_eng.lua): prefix completion is raised only
+when the input length is at least 4; a length-3 exact dictionary hit may
+surface; me, or, and of never do.

@@ -28,3 +28,15 @@
 - 預編輯：字母／字根
 
 唔好把 `unknown_space_min`、`hold_min` 等數字暴露成用戶欄位。
+
+## 進度（macOS 殼）
+
+| 項目 | 狀態 | 證據 |
+| --- | --- | --- |
+| 引擎封入 app（librime 1.17.0 + lua，詞庫預先編譯） | 完成 | `mac/build.sh selftest` 全部 PASS（kin-studio，macOS 27.0.1） |
+| `vd1` → 好 | 引擎 self-test 通過；真鍵未證實 | 見下面「真鍵」 |
+| 設定視窗改每頁 5／9 | 引擎 self-test 通過（`vd` 空白 1 → 媒）；設定視窗未喺真機撳過 | `Tests/SelfTest` |
+| App Store 版（sandbox） | build 同 ad-hoc 簽名通過 | entitlements：app-sandbox、mach-register `_Connection` |
+| 直裝版 | build 通過；未有 Developer ID，未公證 | 需要 Apple Developer 帳號 |
+
+真鍵：輸入法已經登記、啟用，亦揀得到（`TISSelectInputSource` 0），系統會啟動 KINFX 程序，IMK 亦有叫 `activateServer`。不過 TextEdit 嘅按鍵仲係交咗俾鼠鬚管，`handle` 冇被叫過。macOS 要登出再登入一次，先會重建呢個登入 session 嘅輸入法清單，而我冇喺 kin-studio 登出。
