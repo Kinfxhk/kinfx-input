@@ -24,10 +24,12 @@ final class KINFXInputController: IMKInputController {
     Trace.log("controller init client=\(String(describing: inputClient))")
   }
 
-  // IMK falls back to this when handleEvent:client: is not used for a client.
+  // IMK prefers this over handleEvent:client: when both exist (real-key trace, 6ba4532),
+  // so key downs come here; handleEvent still receives flagsChanged for Shift alone.
   override func inputText(_ string: String!, key keyCode: Int, modifiers flags: Int, client sender: Any!) -> Bool {
     Trace.log("inputText:key: [\(string ?? "")] key=\(keyCode) flags=\(String(flags, radix: 16))")
-    return false
+    let mods = Self.mods(NSEvent.ModifierFlags(rawValue: UInt(flags)))
+    return keyDown(UInt16(keyCode), string, string, mods, sender)
   }
 
   private static func mods(_ f: NSEvent.ModifierFlags) -> RimeKeys.Mods {
@@ -53,13 +55,20 @@ final class KINFXInputController: IMKInputController {
       Trace.log("  flags k=\(String(k, radix: 16)) m=\(String(m, radix: 16))")
       handled = engine.key(session, k, m)
     case .keyDown:
-      guard let (k, m) = RimeKeys.keyDown(keyCode: event.keyCode, chars: event.characters,
-                                          bare: event.charactersIgnoringModifiers, mods: mods) else { return false }
-      Trace.log("  key k=\(String(k, radix: 16)) m=\(String(m, radix: 16))")
-      handled = engine.key(session, k, m)
+      return keyDown(event.keyCode, event.characters, event.charactersIgnoringModifiers, mods, sender)
     default:
       return false
     }
+    update(client)
+    Trace.log("  -> sent rime handled=\(handled)")
+    return handled
+  }
+
+  private func keyDown(_ keyCode: UInt16, _ chars: String?, _ bare: String?, _ mods: RimeKeys.Mods, _ sender: Any!) -> Bool {
+    guard let client = sender as? IMKTextInput, ensureSession(),
+          let (k, m) = RimeKeys.keyDown(keyCode: keyCode, chars: chars, bare: bare, mods: mods) else { return false }
+    Trace.log("  key k=\(String(k, radix: 16)) m=\(String(m, radix: 16))")
+    let handled = engine.key(session, k, m)
     update(client)
     Trace.log("  -> sent rime handled=\(handled)")
     return handled
