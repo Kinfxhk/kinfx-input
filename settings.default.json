@@ -1,9 +1,10 @@
 {
-  "page_size": 9,
-  "english_space": "safe",
   "association": true,
-  "space_after_pick": "type",
-  "phrase_capture": "hot",
+  "candidate_layout": "vertical",
   "empty_shift": "noop",
-  "preedit": "letters"
+  "english_space": "safe",
+  "page_size": 9,
+  "phrase_capture": "hot",
+  "preedit": "letters",
+  "space_after_pick": "type"
 }
