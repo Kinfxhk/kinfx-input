@@ -57,6 +57,12 @@ func type(_ keys: String) -> (commit: String, view: RimeView) {
 }
 
 check("vd1", type("vd1").commit, "好")
+check("vd1 Return reaches app (assoc closes, not eaten)", { () -> String in
+  let sess = engine.newSession(); defer { engine.destroy(sess) }
+  for k: Int32 in [0x76, 0x64, 0x31] { _ = engine.key(sess, k, 0) }
+  _ = engine.takeCommit(sess)
+  return String(engine.key(sess, 0xff0d, 0)) + "/" + String(engine.view(sess).candidates.isEmpty)
+}(), "false/true")
 let v9 = type("vd").view
 check("default page_size", String(v9.pageSize), "9")
 check("default first page count", String(v9.candidates.count), "9")
