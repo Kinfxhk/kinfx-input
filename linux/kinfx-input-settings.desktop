@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=KINFX Input 設定
-Comment=KINFX Input 輸入法設定、說明、關於、捐款
+Comment=KINFX Input 輸入法設定、說明、關於、支持
 Exec=/usr/bin/kinfx-input-settings
 Icon=input-keyboard
 Categories=Settings;
