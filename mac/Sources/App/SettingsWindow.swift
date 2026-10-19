@@ -37,7 +37,7 @@ final class SettingsWindow: NSWindow {
     let buttons = NSStackView(views: [
       NSButton(title: "說明", target: self, action: #selector(help)),
       NSButton(title: "關於", target: self, action: #selector(about)),
-      NSButton(title: "捐款", target: self, action: #selector(donate)),
+      NSButton(title: "支持", target: self, action: #selector(donate)),
     ])
     buttons.spacing = 8
     let stack = NSStackView(views: [grid, status, buttons])

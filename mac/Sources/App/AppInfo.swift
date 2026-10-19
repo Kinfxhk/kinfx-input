@@ -57,14 +57,14 @@ struct AppInfo {
     if links.isEmpty {
       if let u = shared.donateLink { NSWorkspace.shared.open(u); return }
       let a = NSAlert()
-      a.messageText = "捐款"
-      a.informativeText = "捐款連結尚未設定。"
+      a.messageText = "支持"
+      a.informativeText = "支持連結尚未設定。"
       a.runModal()
       return
     }
     if links.count == 1 { NSWorkspace.shared.open(links[0].url); return }
     let a = NSAlert()
-    a.messageText = "捐款"
+    a.messageText = "支持"
     a.informativeText = "揀一個："
     for l in links { a.addButton(withTitle: l.label) }
     a.addButton(withTitle: "取消")
