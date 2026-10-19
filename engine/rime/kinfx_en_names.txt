@@ -378,7 +378,6 @@ SaaS	saas
 HDMI	hdmi
 SSD	ssd
 PNG	png
-JPG	jpg
 JPEG	jpeg
 CSV	csv
 SVG	svg
@@ -489,3 +488,34 @@ utf	utf
 del	del
 cfg	cfg
 pid	pid
+
+# Short English tokens whose first pair is a sucheng code
+mac	mac
+ios	ios
+ipod	ipod
+imap	imap
+smtp	smtp
+www	www
+dmg	dmg
+exe	exe
+dll	dll
+yml	ym
+ini	ini
+ide	ide
+php	php
+scp	scp
+gdb	gdb
+lldb	lldb
+svc	svc
+tui	tui
+ceo	ceo
+cto	cto
+cfo	cfo
+wip	wip
+uniq	uniq
+dict	dict
+src	src
+dev	dev
+lan	lan
+com	com
+org	org
