@@ -5,7 +5,7 @@
   <exec>/usr/lib/kinfx-input/kinfx-ibus --ibus</exec>
   <version>@VERSION@</version>
   <license>MIT</license>
-  <homepage>https://linktr.ee/kinfx</homepage>
+  <homepage>https://buymeacoffee.com/kinfxhk</homepage>
   <textdomain>kinfx-input</textdomain>
   <engines>
     <engine>
