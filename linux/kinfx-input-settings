@@ -1,0 +1,81 @@
+#!/usr/bin/python3
+"""KINFX Input settings window (GTK 3). The only place a user changes anything."""
+import os
+import sys
+
+import gi
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gio, Gtk  # noqa: E402
+
+sys.path.insert(0, os.environ.get("KX_LIB", "/usr/lib/kinfx-input"))
+import kxcore  # noqa: E402
+
+PATH = os.path.join(kxcore.USER, "settings.json")
+
+
+def info_dialog(parent, title, body):
+    d = Gtk.MessageDialog(transient_for=parent, modal=True, buttons=Gtk.ButtonsType.OK, text=title)
+    d.format_secondary_text(body)
+    d.run()
+    d.destroy()
+
+
+class Win(Gtk.Window):
+    def __init__(self):
+        super().__init__(title="KINFX Input 設定")
+        self.set_border_width(20)
+        self.set_resizable(False)
+        os.makedirs(kxcore.USER, exist_ok=True)
+        cur = kxcore.load(PATH)
+        grid = Gtk.Grid(row_spacing=10, column_spacing=12)
+        self.combos = {}
+        for r, s in enumerate(kxcore.SPEC):
+            lab = Gtk.Label(label=s["label"], xalign=1)
+            c = Gtk.ComboBoxText()
+            for v, text in s["options"]:
+                c.append(v, text)
+            c.set_active_id(cur[s["key"]])
+            c.connect("changed", self.changed)
+            lab.set_mnemonic_widget(c)
+            self.combos[s["key"]] = c
+            grid.attach(lab, 0, r, 1, 1)
+            grid.attach(c, 1, r, 1, 1)
+        self.status = Gtk.Label(label="變更即時生效。", xalign=0)
+        btns = Gtk.Box(spacing=8)
+        for text, fn in (("說明", self.help), ("關於", self.about), ("捐款", self.donate)):
+            b = Gtk.Button(label=text)
+            b.connect("clicked", fn)
+            btns.pack_start(b, False, False, 0)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        for w in (grid, self.status, btns):
+            box.pack_start(w, False, False, 0)
+        self.add(box)
+
+    def changed(self, _):
+        vals = {k: c.get_active_id() for k, c in self.combos.items()}
+        try:
+            kxcore.save(vals, PATH)
+            self.status.set_text("已套用。切換到其他視窗再回來即生效。")
+        except OSError as e:
+            self.status.set_text("儲存失敗：%s" % e)
+
+    def help(self, _):
+        info_dialog(self, "KINFX Input 說明", "\n".join("• " + h for h in kxcore.INFO["help"]))
+
+    def about(self, _):
+        i = kxcore.INFO
+        info_dialog(self, "KINFX Input %s" % i["version"], i["about"] + "\n\n授權：" + i.get("license", ""))
+
+    def donate(self, _):
+        url = kxcore.INFO.get("donate_url", "").strip()
+        if url.startswith(("https://", "http://")):
+            Gio.AppInfo.launch_default_for_uri(url, None)
+        else:
+            info_dialog(self, "捐款", "捐款連結尚未設定。")
+
+
+if __name__ == "__main__":
+    w = Win()
+    w.connect("destroy", Gtk.main_quit)
+    w.show_all()
+    Gtk.main()
