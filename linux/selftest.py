@@ -47,6 +47,6 @@ for size in ("5", "9"):
     check("vd shows %s" % size, len(type_keys(codes("vd"))[1][3]), int(size))
 
 check("bad settings.json falls back", kxcore.load("/nonexistent")["page_size"], "9")
-check("donate_url", kxcore.INFO["donate_url"], "https://linktr.ee/kinfx")
+check("donate_url", kxcore.INFO["donate_url"], "https://buymeacoffee.com/kinfxhk")
 print("ALL PASS" if not fails else "%d FAIL" % fails)
 sys.exit(1 if fails else 0)
