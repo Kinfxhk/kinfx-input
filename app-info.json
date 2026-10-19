@@ -10,6 +10,11 @@
     "Enter 上屏，Esc 清除。",
     "設定：在「設定」視窗修改，改動即時生效，毋須編輯任何檔案。"
   ],
-  "donate_url": "https://linktr.ee/kinfx",
+  "donate_url": "",
+  "donate_links": [
+    {"label": "PayMe", "url": "https://payme.hsbc/kinfx"},
+    {"label": "PayPal", "url": "https://www.paypal.me/sc2nohope"},
+    {"label": "Buy Me a Coffee", "url": "https://buymeacoffee.com/kinfxhk"}
+  ],
   "license": "MIT（引擎 librime 為 BSD-3-Clause）"
 }
