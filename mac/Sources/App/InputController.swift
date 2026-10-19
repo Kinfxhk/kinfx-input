@@ -81,6 +81,7 @@ final class KINFXInputController: IMKInputController {
       client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
     }
     let view = engine.view(session)
+    if !view.candidates.isEmpty { Trace.log("  view page=\(view.pageSize) n=\(view.candidates.count) layout=\(engine.settings["candidate_layout"] ?? "vertical")") }
     let attrs = mark(forStyle: kTSMHiliteSelectedRawText, at: NSRange(location: 0, length: 0)) as? [NSAttributedString.Key: Any] ?? [:]
     let pre = NSAttributedString(string: view.preedit, attributes: attrs)
     client.setMarkedText(pre, selectionRange: NSRange(location: view.cursorUTF16, length: 0),
