@@ -1,0 +1,27 @@
+# encoding: utf-8
+# Dependency-only schema: makes the deployer compile kinfx_en (English
+# completion) into a native table for kinfx_quick. Not meant to be selected.
+# MIT (project LICENSE); word list: lexicon/NOTICE (SCOWL).
+
+schema:
+  schema_id: kinfx_en
+  name: KINFX 英詞（內部）
+  version: "0.4.1"
+  description: kinfx_quick 用嘅英詞表，唔使單獨揀。
+
+engine:
+  processors:
+    - speller
+    - selector
+    - express_editor
+  segmentors:
+    - abc_segmentor
+  translators:
+    - table_translator
+
+speller:
+  alphabet: zyxwvutsrqponmlkjihgfedcba
+
+translator:
+  dictionary: kinfx_en
+  enable_user_dict: false

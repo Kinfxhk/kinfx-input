@@ -1,0 +1,30 @@
+KINFX IME — notices for third-party components
+
+This project's *original* code and documentation are MIT-licensed (see LICENSE).
+Bundled or dependent schema/dictionary packages keep their own licenses:
+
+- librime — BSD-3-Clause (https://github.com/rime/librime)
+- rime-quick (速成) — LGPL-3.0 (https://github.com/rime/rime-quick)
+- rime-cangjie — LGPL-3.0 (build dependency for quick dict)
+- rime-essay — LGPL-3.0
+- rime-luna-pinyin — LGPL-3.0
+- rime-cantonese / jyutping data — typically CC BY 4.0; maps may be ODbL 1.0
+  (verify each package LICENSE before redistribution)
+- fcitx5-rime — LGPL-2.1-or-later
+- Debian packaged rime-data-jyut6ping3 / librime-data-jyutping — see package copyright
+- essay-cantonese.txt (with rime-cantonese) — see package copyright
+- schemas/kinfx-quick/win_quick_top9.tsv — first-page order hint only
+  (at most nine characters per Sucheng code). It is not a dictionary and not
+  Microsoft's lexicon. The reconstruction consulted for that order is
+  https://github.com/philipposkhos/rime-ms-quick (no upstream license; we do
+  not vendor that repository). See docs/WIN_QUICK_RANK.md.
+
+- lexicon/hk — essay-cantonese words and the 4-character band (CC BY 4.0,
+  rime-cantonese) encoded with Sucheng codes derived from rime-quick (LGPL-3.0).
+  Not MIT. See lexicon/NOTICE.
+- lexicon/en — SCOWL English word list (Copyright 2000-2011 Kevin Atkinson;
+  permissive, notice required) plus Gmail/GMAIL rows in lexicon/en/extras.tsv.
+  This is the M5 / melt_eng channel. rime-ice (GPL-3.0) is not included.
+
+Do not invent proprietary dictionaries. Ship only open-licensed data and keep
+attribution. Do not relicense lexicon/ as MIT.

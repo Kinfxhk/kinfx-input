@@ -1,0 +1,27 @@
+# encoding: utf-8
+# Dependency-only schema: makes the deployer compile kinfx_assoc (Windows-style
+# association suffixes 聯想) into a native table for kinfx_quick.
+# Not meant to be selected. MIT (project LICENSE); data: lexicon/NOTICE.
+
+schema:
+  schema_id: kinfx_assoc
+  name: KINFX 聯想詞（內部）
+  version: "0.5.0"
+  description: kinfx_quick 用嘅聯想詞表，唔使單獨揀。
+
+engine:
+  processors:
+    - speller
+    - selector
+    - express_editor
+  segmentors:
+    - abc_segmentor
+  translators:
+    - table_translator
+
+speller:
+  alphabet: zyxwvutsrqponmlkjihgfedcba
+
+translator:
+  dictionary: kinfx_assoc
+  enable_user_dict: false
