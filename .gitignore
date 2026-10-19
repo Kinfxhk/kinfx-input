@@ -1,2 +1,5 @@
 mac/build/
 .DS_Store
+windows/build/
+linux/build/
+dist/
