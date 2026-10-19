@@ -41,6 +41,7 @@ final class Engine {
   let sharedDir: String
   let userDir: String
   private(set) var started = false
+  private(set) var settings = Settings.defaults()
 
   init(sharedDir: String, userDir: String) {
     self.sharedDir = sharedDir
@@ -61,7 +62,8 @@ final class Engine {
       try? fm.removeItem(atPath: dst)
       try fm.copyItem(atPath: src, toPath: dst)
     }
-    try writeCustom(Settings.load(settingsPath))
+    settings = Settings.load(settingsPath)
+    try writeCustom(settings)
   }
 
   private func writeCustom(_ s: [String: String]) throws {
@@ -93,6 +95,7 @@ final class Engine {
   func apply(_ s: [String: String]) throws {
     try FileManager.default.createDirectory(atPath: userDir, withIntermediateDirectories: true)
     try Settings.save(s, to: settingsPath)
+    settings = Settings.load(settingsPath)
     settingsStamp = stamp()
     try writeCustom(s)
     // Rime compares mtimes in whole seconds; drop the built schema so a change made

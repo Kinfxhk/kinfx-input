@@ -13,10 +13,9 @@ schema_list:
 
 switcher:
   caption: 〔方案選單〕
-  hotkeys:
-    - Control+grave
-    - Control+Shift+grave
-    - F4
+  # KINFX Input: no switcher hotkeys (one scheme; settings live in the app window).
+  # Control+grave and F4 collide with app shortcuts (VS Code terminal, Launchpad).
+  hotkeys: []
   save_options:
     - full_shape
     - ascii_punct
@@ -44,7 +43,7 @@ key_binder:
       - key_bindings:/emacs_editing
       - key_bindings:/paging_with_minus_equal
       - key_bindings:/paging_with_comma_period
-      - key_bindings:/numbered_mode_switch
+      # numbered_mode_switch dropped: Control+Shift+1..5 collide with app shortcuts
 
 selector:
   __patch:

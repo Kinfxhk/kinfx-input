@@ -18,13 +18,15 @@ final class CandidatePanel {
     window.contentView?.addSubview(label)
   }
 
-  func show(_ v: RimeView, below caret: NSRect) {
+  // vertical (default): one candidate per line; horizontal: one row.
+  func show(_ v: RimeView, below caret: NSRect, vertical: Bool) {
     let line = NSMutableAttributedString()
     for (i, c) in v.candidates.enumerated() {
+      if vertical && i > 0 { line.append(NSAttributedString(string: "\n")) }
       let hi = i == v.highlighted
       line.append(NSAttributedString(string: "\(i + 1). ", attributes: [.foregroundColor: NSColor.secondaryLabelColor,
                                                                        .font: label.font!]))
-      line.append(NSAttributedString(string: c.text + c.comment + "  ", attributes: [
+      line.append(NSAttributedString(string: c.text + c.comment + (vertical ? "" : "  "), attributes: [
         .foregroundColor: hi ? NSColor.controlAccentColor : NSColor.labelColor, .font: label.font!]))
     }
     label.attributedStringValue = line

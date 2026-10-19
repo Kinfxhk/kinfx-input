@@ -6,7 +6,7 @@ struct SettingSpec {
   let key: String
   let label: String
   let options: [(value: String, label: String)]  // options[0] is the default
-  let rimeKey: String
+  let rimeKey: String?  // nil = shell-only setting (not passed to Rime)
 }
 
 enum Settings {
@@ -25,6 +25,8 @@ enum Settings {
                 options: [("noop", "不動作"), ("ascii", "臨時英文")], rimeKey: "english/empty_shift"),
     SettingSpec(key: "preedit", label: "預編輯顯示",
                 options: [("letters", "字母"), ("radicals", "字根")], rimeKey: "english/preedit"),
+    SettingSpec(key: "candidate_layout", label: "選字表",
+                options: [("vertical", "直排"), ("horizontal", "橫排")], rimeKey: nil),
   ]
 
   static func defaults() -> [String: String] {
@@ -66,9 +68,10 @@ enum Settings {
   static func rimeCustom(_ s: [String: String]) -> String {
     var out = "# 由 KINFX Input 設定視窗產生，請勿手動修改。\npatch:\n"
     for spec in specs {
+      guard let rimeKey = spec.rimeKey else { continue }
       var v = s[spec.key] ?? spec.options[0].value
       if spec.key == "phrase_capture" && v == "off" { v = "none" }
-      out += "  \"\(spec.rimeKey)\": \(v)\n"
+      out += "  \"\(rimeKey)\": \(v)\n"
     }
     return out
   }

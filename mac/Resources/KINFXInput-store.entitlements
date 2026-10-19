@@ -6,6 +6,6 @@
 	<key>com.apple.security.app-sandbox</key>
 	<true/>
 	<key>com.apple.security.temporary-exception.mach-register.global-name</key>
-	<string>hk.kinfx.inputmethod.KINFXInput_Connection</string>
+	<string>KINFXInput_Connection</string>
 </dict>
 </plist>
