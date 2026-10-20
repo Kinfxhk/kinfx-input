@@ -1,0 +1,30 @@
+name: windows-installer
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: librime
+        shell: pwsh
+        run: |
+          $url = "https://github.com/rime/librime/releases/download/1.17.0/rime-33e7814-Windows-msvc-x64.7z"
+          Invoke-WebRequest $url -OutFile rime.7z
+          7z x rime.7z -orime-dist | Out-Null
+          $exe = Get-ChildItem -Recurse rime-dist -Filter rime_deployer.exe | Select-Object -First 1
+          if (-not $exe) { throw "rime_deployer.exe missing" }
+          "RIME_DIST=$($exe.Directory.Parent.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8
+      - name: stage
+        shell: pwsh
+        run: python windows/gen.py $env:RIME_DIST
+      - name: Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+      - name: compile
+        shell: cmd
+        run: windows\build\stage\build.cmd
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KINFX-Input-Windows-x64
+          path: windows/build/stage/out/KINFX-Input-*.exe
