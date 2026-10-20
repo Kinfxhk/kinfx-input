@@ -54,6 +54,15 @@ int main() {
   Check("Return after pick passes to app", std::to_string(kx_key(s, 0xff0d, 0)), "0");
   kx_destroy(s);
   Check("iPhone Space", Type("iPhone "), "iPhone ");
+  for (auto [code, want] : {std::pair<const char *, const char *>{"vdhel", "\xe5\xa5\xbd\xe5\x8f\x8d"}, {"vd", ""}}) {
+    s = kx_session("kinfx_quick");
+    std::string out;
+    for (const char *k = code; *k; k++) { kx_key(s, *k, 0); out += Take(s); }
+    int eaten = kx_key(s, 'v', 4);  // Ctrl+V
+    out += Take(s);
+    Check(std::string(code) + " Ctrl+V commits held, app pastes", out + "/" + std::to_string(eaten), std::string(want) + "/0");
+    kx_destroy(s);
+  }
   for (const char *size : {"5", "9"}) {
     Sleep(1100);
     std::ofstream(kx::UserDir() + L"\\settings.json") << "{\"page_size\": " << size << "}";
