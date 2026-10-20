@@ -2,24 +2,24 @@
 
 獨立輸入法。引擎用現有 KINFX 速成（librime + schema），殼係自己的。公開 repo `kinfx-ime` 停喺 v0.5.10，呢度唔好再推返去。
 
-免費直裝包：macOS／Linux／Windows 都用 [v0.1.2](https://github.com/Kinfxhk/kinfx-input/releases/tag/v0.1.2)。未簽名、未公證。設定只用視窗，唔使改碼。
+免費直裝包：macOS／Linux／Windows 都用 [v0.1.3](https://github.com/Kinfxhk/kinfx-input/releases/tag/v0.1.3)。未簽名、未公證。設定只用視窗，唔使改碼。
 
 ## 安裝包
 
 ### macOS
 
-下載 `KINFX-Input-0.1.2-macOS.pkg`，雙擊安裝。輸入法會放到你的 `~/Library/Input Methods`，唔使管理員。然後到系統設定 → 鍵盤 → 輸入法，加入 KINFX Input。
+下載 `KINFX-Input-0.1.3-macOS.pkg`，雙擊安裝。輸入法會放到你的 `~/Library/Input Methods`，唔使管理員。然後到系統設定 → 鍵盤 → 輸入法，加入 KINFX Input。
 
 新裝可能要登出再登入一次，系統先把按鍵交俾新輸入法。MacBook Neo 用同一個包。
 
 ### Windows
 
-下載 [`KINFX-Input-0.1.2-Windows-x64.exe`](https://github.com/Kinfxhk/kinfx-input/releases/download/v0.1.2/KINFX-Input-0.1.2-Windows-x64.exe)，右鍵以系統管理員執行。裝完在工作列輸入法揀 KINFX Input（速）。唔靠小狼毫。
+下載 [`KINFX-Input-0.1.3-Windows-x64.exe`](https://github.com/Kinfxhk/kinfx-input/releases/download/v0.1.3/KINFX-Input-0.1.3-Windows-x64.exe)，右鍵以系統管理員執行。裝完在工作列輸入法揀 KINFX Input（速）。唔靠小狼毫。
 
 ### Linux（amd64，要 IBus）
 
 ```sh
-sudo apt install ./kinfx-input_0.1.2_amd64.deb
+sudo apt install ./kinfx-input_0.1.3_amd64.deb
 ibus restart
 ```
 
