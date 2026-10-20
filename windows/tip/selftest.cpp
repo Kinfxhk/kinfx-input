@@ -54,7 +54,8 @@ int main() {
   Check("Return after pick passes to app", std::to_string(kx_key(s, 0xff0d, 0)), "0");
   kx_destroy(s);
   Check("iPhone Space", Type("iPhone "), "iPhone ");
-  for (auto [code, want] : {std::pair<const char *, const char *>{"vdhel", "\xe5\xa5\xbd\xe5\x8f\x8d"}, {"vd", ""}}) {
+  for (auto cw : {std::pair<const char *, const char *>{"vdhel", "\xe5\xa5\xbd\xe5\x8f\x8d"}, {"vd", ""}}) {
+    const char *code = cw.first, *want = cw.second;
     s = kx_session("kinfx_quick");
     std::string out;
     for (const char *k = code; *k; k++) { kx_key(s, *k, 0); out += Take(s); }
