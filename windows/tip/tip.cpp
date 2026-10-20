@@ -226,7 +226,12 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     else cand_.Hide();
     return S_OK;
   }
-  STDMETHODIMP OnTestKeyDown(ITfContext *, WPARAM w, LPARAM l, BOOL *eaten) override { *eaten = Process(w, l, false); return S_OK; }
+  STDMETHODIMP OnTestKeyDown(ITfContext *c, WPARAM w, LPARAM l, BOOL *eaten) override {
+    *eaten = Process(w, l, false);
+    // A key Rime let through never gets OnKeyDown: write the paste-time commit now, before the app pastes.
+    if (!*eaten && paste_ && c) { pending_ = false; Update(c); }
+    return S_OK;
+  }
   STDMETHODIMP OnTestKeyUp(ITfContext *, WPARAM w, LPARAM l, BOOL *eaten) override { *eaten = Process(w, l, true); return S_OK; }
   STDMETHODIMP OnKeyDown(ITfContext *c, WPARAM w, LPARAM l, BOOL *eaten) override { *eaten = Handle(c, w, l, false); return S_OK; }
   STDMETHODIMP OnKeyUp(ITfContext *c, WPARAM w, LPARAM l, BOOL *eaten) override { *eaten = Handle(c, w, l, true); return S_OK; }
@@ -255,6 +260,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     // Ctrl+V while a preedit shows goes to Rime first (0.1.2): held top-outs commit, letters drop, app pastes.
     // No preedit (e.g. association list after a pick) keeps the app paste, so Lua never shells out for the clipboard.
     bool paste = comp_ && (sym == 'v' || sym == 'V') && (mask & (kControl | kAlt)) == kControl;
+    paste_ = paste && !up;
     if (!sym || ((mask & (kControl | kAlt)) && !paste) || !Session()) return false;
     if (up && !modKey) return false;
     if (modKey) mask &= ~kShift;  // Rime gets the Shift key itself, not Shift as a modifier
@@ -379,7 +385,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   uintptr_t sess_ = 0;
   ITfComposition *comp_ = nullptr;
   CandWin cand_;
-  bool pending_ = false, pendUp_ = false, pendEaten_ = false;
+  bool pending_ = false, pendUp_ = false, pendEaten_ = false, paste_ = false;
   WPARAM pendW_ = 0;
 };
 
