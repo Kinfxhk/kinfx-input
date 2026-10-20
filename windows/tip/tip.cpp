@@ -226,10 +226,10 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     else cand_.Hide();
     return S_OK;
   }
-  STDMETHODIMP OnTestKeyDown(ITfContext *c, WPARAM w, LPARAM l, BOOL *eaten) override {
+  STDMETHODIMP OnTestKeyDown(ITfContext *, WPARAM w, LPARAM l, BOOL *eaten) override {
     *eaten = Process(w, l, false);
-    // A key Rime let through never gets OnKeyDown: write the paste-time commit now, before the app pastes.
-    if (!*eaten && paste_ && c) { pending_ = false; Update(c); }
+    // Paste: claim it here so OnKeyDown runs (sync edit session commits the held text), then OnKeyDown passes it to the app.
+    if (paste_) *eaten = TRUE;
     return S_OK;
   }
   STDMETHODIMP OnTestKeyUp(ITfContext *, WPARAM w, LPARAM l, BOOL *eaten) override { *eaten = Process(w, l, true); return S_OK; }
