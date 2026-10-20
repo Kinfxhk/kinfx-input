@@ -64,5 +64,23 @@ text = "".join(out)
 print("commits:", out, "return handled:", r, "last table:", passed)
 want_n = int(sys.argv[1]) if len(sys.argv) > 1 else 9
 ok = text == "好iPhone " and r is False and list(passed.values())[0] == want_n
+
+# 0.1.1 English fixes through real IBus key events (Shift+/ arrives as "?" with the shift mask)
+SHIFT = IBus.ModifierType.SHIFT_MASK
+for keys, want in [("hello.vd1", "hello\u3002\u597d"), ("hello\r", "hello"), ("thanks?", "thanks\uff1f"),
+                   ("don't ", "don't "), ("gg ", "gg "), ("fogge 1", "\u708a\u572d\u6c34")]:
+    out.clear()
+    for c in keys:
+        if c == "\r":
+            send(0xff0d)
+        elif c == "?":
+            send(0xffe1)  # Shift_L press, then ?, then release: what a keyboard sends
+            send(ord(c), SHIFT)
+        else:
+            send(ord(c))
+    pump(0.3)
+    got = "".join(out)
+    print("%s %r: got %r want %r" % ("PASS" if got == want else "FAIL", keys, got, want))
+    ok = ok and got == want
 print("ALL PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)

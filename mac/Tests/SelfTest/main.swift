@@ -86,5 +86,27 @@ try engine.apply(five)
 check("page_size back to 9", String(type("vd").view.pageSize), "9")
 check("english word", type("iPhone ").commit, "iPhone ")
 
+// 0.1.1 English fixes (engine/rime/lua/english_mix.lua).
+func typeKeys(_ keys: [Int32]) -> String {
+  let sess = engine.newSession(); defer { engine.destroy(sess) }
+  var out = ""
+  for k in keys { _ = engine.key(sess, k, 0); if let c = engine.takeCommit(sess) { out += c } }
+  return out
+}
+let ret: Int32 = 0xff0d
+check("word . chinese", type("hello.vd1").commit, "hello\u{3002}\u{597D}")
+check("domain stays latin", type("openai.com ").commit, "openai.com ")
+check("file name stays latin", type("llama.cpp ").commit, "llama.cpp ")
+check("5-letter prefix + space stays chinese", type("fogge 1").commit, "\u{708A}\u{572D}\u{6C34}")
+check("word Enter", typeKeys([0x68, 0x65, 0x6c, 0x6c, 0x6f, ret]), "hello")
+check("chinese Enter unchanged", typeKeys([0x76, 0x64, ret]), "\u{597D}")
+check("word ?", type("thanks?").commit, "thanks\u{FF1F}")
+check("contraction", type("don't ").commit, "don't ")
+check("gg space", type("gg ").commit, "gg ")
+check("gg1 still chinese", type("gg1").commit, "\u{572D}")
+check("ez space still pages", type("ez ").commit, "")
+check("/init space", type("/init ").commit, "/init ")
+check("ofc1", type("ofc1").commit, "\u{4EBA}\u{985E}")
+
 print(failures == 0 ? "ALL PASS" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)
