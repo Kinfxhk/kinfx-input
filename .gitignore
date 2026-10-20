@@ -3,3 +3,4 @@ mac/build/
 windows/build/
 linux/build/
 dist/
+windows/out/
