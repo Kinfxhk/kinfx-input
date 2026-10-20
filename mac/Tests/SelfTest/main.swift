@@ -33,6 +33,7 @@ func km(_ r: (Int32, Int32)?) -> String { r.map { String(format: "%x/%x", $0.0, 
 check("letter", km(RimeKeys.keyDown(keyCode: 9, chars: "v", bare: "v", mods: [])), "76/0")
 check("shift+4", km(RimeKeys.keyDown(keyCode: 21, chars: "$", bare: "4", mods: .shift)), "24/1")
 check("ctrl+v", km(RimeKeys.keyDown(keyCode: 9, chars: "\u{16}", bare: "v", mods: .control)), "76/4")
+check("ctrl+v from inputText (control char as bare)", km(RimeKeys.keyDown(keyCode: 9, chars: "\u{16}", bare: "\u{16}", mods: .control)), "76/4")
 check("space", km(RimeKeys.keyDown(keyCode: 49, chars: " ", bare: " ", mods: [])), "20/0")
 check("left shift down", km(RimeKeys.flagsChanged(keyCode: 56, mods: .shift)), "ffe1/1")
 check("left shift up", km(RimeKeys.flagsChanged(keyCode: 56, mods: [])), "ffe1/40000000")
