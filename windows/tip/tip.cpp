@@ -276,6 +276,20 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     // Update the document even for keys Rime let through: e.g. Return after a pick
     // closes the association list (Rime state changed) and must still reach the app.
     Update(c);
+    if (paste_ && !up) {
+      // TSF already ate this Ctrl+V (OnTestKeyDown); the held text is written, composition closed,
+      // so a re-sent V reaches the app as a plain paste (paste_ needs comp_, now null).
+      paste_ = false;
+      INPUT in[4] = {};
+      int n = 0;
+      bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+      if (!ctrl) { in[n].type = INPUT_KEYBOARD; in[n++].ki.wVk = VK_CONTROL; }
+      in[n].type = INPUT_KEYBOARD; in[n++].ki.wVk = 'V';
+      in[n].type = INPUT_KEYBOARD; in[n].ki.wVk = 'V'; in[n++].ki.dwFlags = KEYEVENTF_KEYUP;
+      if (!ctrl) { in[n].type = INPUT_KEYBOARD; in[n].ki.wVk = VK_CONTROL; in[n++].ki.dwFlags = KEYEVENTF_KEYUP; }
+      SendInput(n, in, sizeof(INPUT));
+      return true;
+    }
     return eaten;
   }
 
