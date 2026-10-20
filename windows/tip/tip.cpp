@@ -282,7 +282,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
       paste_ = false;
       INPUT in[4] = {};
       int n = 0;
-      bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+      bool ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;  // async: a fast Ctrl release is already queued ahead of us
       if (!ctrl) { in[n].type = INPUT_KEYBOARD; in[n++].ki.wVk = VK_CONTROL; }
       in[n].type = INPUT_KEYBOARD; in[n++].ki.wVk = 'V';
       in[n].type = INPUT_KEYBOARD; in[n].ki.wVk = 'V'; in[n++].ki.dwFlags = KEYEVENTF_KEYUP;
