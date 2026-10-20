@@ -2,6 +2,29 @@
 
 獨立輸入法。引擎用現有 KINFX 速成（librime + schema），殼係自己的。公開 repo `kinfx-ime` 停喺 v0.5.10，呢度唔好再推返去。
 
+免費直裝包：[v0.1.0](https://github.com/Kinfxhk/kinfx-input/releases/tag/v0.1.0)。未簽名、未公證。設定只用視窗，唔使改碼。
+
+## 安裝包
+
+### macOS
+
+下載 `KINFX-Input-0.1.0-macOS.pkg`，雙擊安裝。輸入法會放到你的 `~/Library/Input Methods`，唔使管理員。然後到系統設定 → 鍵盤 → 輸入法，加入 KINFX Input。
+
+新裝可能要登出再登入一次，系統先把按鍵交俾新輸入法。MacBook Neo 用同一個包。
+
+### Windows
+
+下載 `KINFX-Input-0.1.0-Windows-x64.exe`，右鍵以系統管理員執行。裝完在工作列輸入法揀 KINFX Input（速）。唔靠小狼毫。
+
+### Linux（amd64，要 IBus）
+
+```sh
+sudo apt install ./kinfx-input_0.1.0_amd64.deb
+ibus restart
+```
+
+然後在 IBus 偏好設定加入 KINFX Input。唔使自己裝 Rime schema。
+
 ## 平台
 
 | 殼 | 系統 API | 備註 |
@@ -11,7 +34,7 @@
 | iPad / iOS | Keyboard Extension | 同 macOS 唔係同一個二進位。 |
 | Android | IME | Google Play。唔係 Google Books。 |
 
-先做 macOS 殼。其他殼之後接同一個 `settings.json`，唔好先寫四套。
+三個桌面殼已經有安裝包，見上面。iPad、Android 未有包。設定格式三邊共用 `settings.json`。
 
 ## 用戶唔改碼
 
