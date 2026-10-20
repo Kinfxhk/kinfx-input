@@ -662,8 +662,11 @@ local function dispatch(key, env)
         return kAccepted
       end
     end
-    reset()
-    rescue_drop()
+    -- 0.1.2: paste mid-composition keeps the Windows model: the held top-outs
+    -- reach the app (already committed in Windows), the letters drop, then the
+    -- app pastes (kRejected). Same text as "Esc then paste".
+    rescue_end(env)
+    flush(env)
     S.guard = true
     env.engine.context:clear()
     S.guard = false

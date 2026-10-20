@@ -106,6 +106,24 @@ check("gg space", type("gg ").commit, "gg ")
 check("gg1 still chinese", type("gg1").commit, "\u{572D}")
 check("ez space still pages", type("ez ").commit, "")
 check("/init space", type("/init ").commit, "/init ")
+
+// 0.1.2: paste mid-composition keeps the held top-outs (Windows model), drops the letters.
+check("held top-outs flush before Ctrl+V", { () -> String in
+  let sess = engine.newSession(); defer { engine.destroy(sess) }
+  var out = ""
+  for k: Int32 in [0x76, 0x64, 0x68, 0x65, 0x6c] { _ = engine.key(sess, k, 0); if let c = engine.takeCommit(sess) { out += c } }
+  _ = engine.key(sess, 0x76, 1 << 2)
+  if let c = engine.takeCommit(sess) { out += c }
+  return out
+}(), "\u{597D}\u{53CD}")
+check("plain code drops before Ctrl+V", { () -> String in
+  let sess = engine.newSession(); defer { engine.destroy(sess) }
+  var out = ""
+  for k: Int32 in [0x76, 0x64] { _ = engine.key(sess, k, 0); if let c = engine.takeCommit(sess) { out += c } }
+  _ = engine.key(sess, 0x76, 1 << 2)
+  if let c = engine.takeCommit(sess) { out += c }
+  return out
+}(), "")
 check("ofc1", type("ofc1").commit, "\u{4EBA}\u{985E}")
 
 print(failures == 0 ? "ALL PASS" : "\(failures) FAILED")

@@ -82,5 +82,15 @@ for keys, want in [("hello.vd1", "hello\u3002\u597d"), ("hello\r", "hello"), ("t
     got = "".join(out)
     print("%s %r: got %r want %r" % ("PASS" if got == want else "FAIL", keys, got, want))
     ok = ok and got == want
+
+# 0.1.2: Ctrl+V mid-composition flushes the held top-outs (Windows model)
+out.clear()
+for c in "vdhel":
+    send(ord(c))
+send(ord("v"), IBus.ModifierType.CONTROL_MASK)
+pump(0.3)
+got = "".join(out)
+print("%s %r: got %r want %r" % ("PASS" if got == "\u597d\u53cd" else "FAIL", "vdhel ctrl+v", got, "\u597d\u53cd"))
+ok = ok and got == "\u597d\u53cd"
 print("ALL PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)
