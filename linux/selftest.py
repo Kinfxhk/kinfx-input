@@ -25,7 +25,10 @@ def type_keys(keys):
     s = E.session()
     out = ""
     for k in keys:
-        E.key(s, k, 0)
+        if isinstance(k, tuple):
+            E.key(s, k[0], k[1])
+        else:
+            E.key(s, k, 0)
         out += E.commit(s) or ""
     view = E.view(s)
     E.lib.kx_destroy(s)
@@ -55,6 +58,9 @@ for name, keys, want in [
     ("ez space still pages", codes("ez "), ""),
     ("/init space", codes("/init "), "/init "),
     ("ofc1", codes("ofc1"), "\u4eba\u985e"),
+    ("held top-outs flush before Ctrl+V",
+     codes("vdhel") + [(ord("v"), 4)], "\u597d\u53cd"),
+    ("plain code drops before Ctrl+V", codes("vd") + [(ord("v"), 4)], ""),
 ]:
     check(name, type_keys(keys)[0], want)
 
