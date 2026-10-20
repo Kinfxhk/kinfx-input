@@ -2,7 +2,19 @@
 rem Build KINFX Input for Windows inside windows\build\stage (made by gen.py). Needs MSVC x64 + Inno Setup 6.
 setlocal
 cd /d "%~dp0"
-call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" >nul || exit /b 1
+if not defined VCVARS (
+  for %%P in (
+    "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+    "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+    "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
+    "C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvars64.bat"
+  ) do if exist %%P set "VCVARS=%%~P"
+)
+if not defined VCVARS (
+  echo MSVC vcvars64.bat not found >&2
+  exit /b 1
+)
+call "%VCVARS%" >nul || exit /b 1
 if exist out rmdir /s /q out
 mkdir out obj
 set CF=/nologo /O2 /MT /EHsc /utf-8 /W3 /DUNICODE /D_UNICODE /D_CRT_SECURE_NO_WARNINGS /D_CRT_NONSTDC_NO_DEPRECATE /Irime /I. /Itip
