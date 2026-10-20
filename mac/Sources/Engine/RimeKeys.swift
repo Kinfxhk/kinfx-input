@@ -46,7 +46,10 @@ enum RimeKeys {
   static func keyDown(keyCode: UInt16, chars: String?, bare: String?, mods: Mods) -> (Int32, Int32)? {
     if let k = special[keyCode] { return (k, mask(mods)) }
     // Control / Option / Command change `characters`; Rime wants the base key.
-    let text = mods.intersection([.control, .option, .command]).isEmpty ? chars : bare?.lowercased()
+    var text = mods.intersection([.control, .option, .command]).isEmpty ? chars : bare?.lowercased()
+    // inputText(_:key:modifiers:) hands over the control character itself (Ctrl+V = U+0016): use its letter.
+    if mods.contains(.control), let u = text?.unicodeScalars.first, text?.unicodeScalars.count == 1,
+       (1...26).contains(u.value) { text = String(UnicodeScalar(u.value + 0x60)!) }
     guard let t = text, t.unicodeScalars.count == 1, let u = t.unicodeScalars.first,
           u.value >= 0x20, u.value < 0x7f else { return nil }
     return (Int32(u.value), mask(mods))
