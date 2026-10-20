@@ -252,7 +252,10 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     int sym = KeySym(w, l), mask = Mask();
     bool modKey = sym >= 0xffe1 && sym <= 0xffe2;
     // Shortcuts with Ctrl/Alt go to the app; Shift taps reach Rime (english_mix).
-    if (!sym || (mask & (kControl | kAlt)) || !Session()) return false;
+    // Ctrl+V while a preedit shows goes to Rime first (0.1.2): held top-outs commit, letters drop, app pastes.
+    // No preedit (e.g. association list after a pick) keeps the app paste, so Lua never shells out for the clipboard.
+    bool paste = comp_ && (sym == 'v' || sym == 'V') && (mask & (kControl | kAlt)) == kControl;
+    if (!sym || ((mask & (kControl | kAlt)) && !paste) || !Session()) return false;
     if (up && !modKey) return false;
     if (modKey) mask &= ~kShift;  // Rime gets the Shift key itself, not Shift as a modifier
     bool eaten = kx_key(sess_, sym, mask | (up ? kRelease : 0)) != 0;
