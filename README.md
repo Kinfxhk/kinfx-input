@@ -14,7 +14,7 @@
 
 ### Windows
 
-下載 `[KINFX-Input-0.1.2-Windows-x64.exe](https://github.com/Kinfxhk/kinfx-input/releases/download/v0.1.2/KINFX-Input-0.1.2-Windows-x64.exe)`，右鍵以系統管理員執行。裝完在工作列輸入法揀 KINFX Input（速）。唔靠小狼毫。
+下載 [`KINFX-Input-0.1.2-Windows-x64.exe`](https://github.com/Kinfxhk/kinfx-input/releases/download/v0.1.2/KINFX-Input-0.1.2-Windows-x64.exe)，右鍵以系統管理員執行。裝完在工作列輸入法揀 KINFX Input（速）。唔靠小狼毫。
 
 ### Linux（amd64，要 IBus）
 
