@@ -22,8 +22,13 @@ jobs:
         shell: pwsh
         run: choco install innosetup -y --no-progress
       - name: compile
-        shell: cmd
-        run: windows\build\stage\build.cmd
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw "MSVC not found" }
+          $env:VCVARS = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
+          Write-Output "VCVARS=$env:VCVARS"
+          cmd /c "set VCVARS=$env:VCVARS&& windows\build\stage\build.cmd"
       - uses: actions/upload-artifact@v4
         with:
           name: KINFX-Input-Windows-x64
