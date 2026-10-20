@@ -499,7 +499,6 @@ www	www
 dmg	dmg
 exe	exe
 dll	dll
-yml	ym
 ini	ini
 ide	ide
 php	php
@@ -519,3 +518,15 @@ dev	dev
 lan	lan
 com	com
 org	org
+
+# AI commands and game chat (0.1.1). 2-letter ones commit on Space only.
+init	init
+mcp	mcp
+gank	gank
+rekt	rekt
+pog	pog
+kekw	kekw
+copium	copium
+gg	gg
+wp	wp
+gl	gl

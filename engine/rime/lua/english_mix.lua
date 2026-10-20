@@ -294,7 +294,8 @@ local function chinese_held(ctx)
 end
 
 local function space_allowed(env, raw)
-  if #raw < 3 or env.space_mode == "off" then
+  -- 2 letters only for a listed name (gg wp gl), and only on Space (callers check #raw)
+  if (#raw < 3 and not (#raw == 2 and env.names[raw])) or env.space_mode == "off" then
     return false
   end
   if env.space_mode == "long" and #raw < 5 then
@@ -337,6 +338,23 @@ local ASSOC_PUNCT = {
   underscore = true, plus = true, less = true, greater = true,
   parenright = true,
 }
+
+-- English contraction stems: only these runs hold an apostrophe (don't it's we're).
+local APOS_STEM = {}
+for w in ("don can won isn aren wasn weren doesn didn hasn haven hadn couldn wouldn shouldn mustn needn it let that what there here who he she we you they"):gmatch("%a+") do
+  APOS_STEM[w] = true
+end
+
+-- After word + ".", letters stay Latin only while they spell a domain / file suffix
+-- (openai.com, llama.cpp, node.js); otherwise "." was a full stop (hello.vd1 -> hello。好).
+-- shortcut: fixed suffix list, add entries when a real token misses.
+local DOT_SUFFIX, DOT_FULL = {}, {}
+for w in ("com net org io ai app dev co hk tw cn jp uk us me tv gg xyz info edu gov js ts py rb go rs md txt json yaml yml toml cpp hpp lua sh html css xml csv pdf png jpg jpeg gif svg mp3 mp4 mov zip dmg pkg exe dll deb apk"):gmatch("%a+") do
+  DOT_FULL[w] = true
+  for i = 1, #w do
+    DOT_SUFFIX[w:sub(1, i)] = true
+  end
+end
 
 local KEYCODE = { Shift_L = 0xffe1, Shift_R = 0xffe2, Caps_Lock = 0xffe5 }
 
@@ -382,15 +400,6 @@ local function unknown_space_ok(env, ctx)
     and unknown_len_ok(env, #S.raw) and not chinese_held(ctx)
 end
 
--- A held prefix of an English word (const, async, defau…) that is not a word
--- itself: Space commits the letters from 5 on, except 6. Six letters are three
--- full Sucheng pairs where Space pages the Chinese menu (compare.py v0.5.4:
--- morton / popper / imprim Space 1 typed the letters instead of 仄啦俐 …).
-local function prefix_space_ok(env, ctx)
-  return env.space_mode ~= "off" and #S.raw >= 5 and #S.raw ~= 6
-    and S.known_en == #S.raw and not chinese_held(ctx)
-end
-
 -- Unknown words after a 4-letter English start: lengths 5 and 7+ only.
 -- Length 6 is three full Sucheng pairs, where Space pages the Chinese menu
 -- (all such 6-letter runs together: 2.6 changes per 10,000 characters).
@@ -403,13 +412,13 @@ end
 local function end_text(env, ctx)
   if S.tracking and S.raw ~= "" then
     -- Word / name form first (gmail -> Gmail); raw letters only after that.
-    if space_allowed(env, S.raw) and not chinese_held(ctx) then
+    if space_allowed(env, S.raw) and #S.raw > 2 and not chinese_held(ctx) then
       local text = space_text(env, S.raw)
       if text then
         return text
       end
     end
-    if unknown_space_ok(env, ctx) or prefix_space_ok(env, ctx) then
+    if unknown_space_ok(env, ctx) then
       return S.raw
     end
     return S.pending .. ctx:get_commit_text()
@@ -499,7 +508,7 @@ local function init(env)
   -- Composition cleared from outside (focus change, schema switch): drop the run.
   env.update_conn = ctx.update_notifier:connect(function(c)
     if not S.guard and (c.input or "") == "" then
-      env.latin = nil
+      env.latin, env.latin_apos, env.dot = nil, false, nil
       reset()
       if R.alive then
         rescue_end(env)
@@ -741,7 +750,50 @@ local function latin_token(ctx)
   return seg and seg:has_tag("url")
 end
 
+-- 0.1.1: letters after word + "." (env.dot). A domain / file suffix keeps the token
+-- Latin; anything else types "word。" and replays the letters the Windows way.
+-- Runs first in func so , / ] after openai.co see the suffix decision.
+local function dot_key(env, key)
+  local d = env.dot
+  if not d or key:release() then
+    return nil
+  end
+  local kc = key.keycode
+  if kc >= 0xffe1 and kc <= 0xffee then
+    return nil -- a bare modifier (Shift before ?)
+  end
+  if key:repr() == "BackSpace" then
+    if d.raw == "" then
+      env.dot, env.latin = nil, d.fallback -- back to "word." waiting, the v0.5.10 path
+    else
+      d.tail, d.raw = d.tail:sub(1, -2), d.raw:sub(1, -2) -- a typo inside the suffix
+    end
+    return nil
+  end
+  local letter = not (key:ctrl() or key:alt() or key:super())
+    and ((kc >= 0x61 and kc <= 0x7a) or (kc >= 0x41 and kc <= 0x5a))
+  local tail = letter and (d.tail .. string.char(kc):lower()) or d.tail
+  if letter and DOT_SUFFIX[tail] then
+    d.tail, d.raw = tail, d.raw .. string.char(kc)
+    return nil
+  end
+  env.dot = nil
+  if not letter and DOT_FULL[tail] then
+    return nil -- openai.com + Space / , / Enter: the url path commits it
+  end
+  local raw = letter and (d.raw .. string.char(kc)) or d.raw
+  commit_word(env, env.engine.context, d.fallback)
+  for i = 1, #raw do
+    env.engine:process_key(KeyEvent(raw:sub(i, i)))
+  end
+  return letter and kAccepted or nil
+end
+
 local function func(key, env)
+  local r0 = dot_key(env, key)
+  if r0 then
+    return r0
+  end
   local kc0 = key.keycode
   local ctx0 = env.engine.context
   if not env.latin and not key:release() and not (key:ctrl() or key:alt() or key:super())
@@ -769,9 +821,19 @@ local function func(key, env)
       end
     elseif not (key:ctrl() or key:alt() or key:super())
            and ((kc >= 0x61 and kc <= 0x7a) or (kc >= 0x41 and kc <= 0x5a)) then
-      env.latin = nil -- a letter: the token goes on as Latin
+      local apos = env.latin_apos
+      env.latin, env.latin_apos = nil, false -- a letter: the token goes on as Latin
+      if apos and not ("tsmdrlv"):find(string.char(kc):lower(), 1, true) then
+        commit_word(env, ctx, fallback) -- not a contraction: the old text, then this letter
+      elseif fallback:sub(-3) == "。" then
+        env.dot = { fallback = fallback, tail = "", raw = "" }
+        r0 = dot_key(env, key)
+        if r0 then
+          return r0
+        end
+      end
     elseif not (kc >= 0xffe1 and kc <= 0xffee and kc ~= 0xffe5 and kc ~= 0xffe6) then
-      env.latin = nil -- not a modifier press: v0.5.9 text, then this key as usual
+      env.latin, env.latin_apos = nil, false -- not a modifier press: v0.5.9 text, then this key as usual
       commit_word(env, ctx, fallback)
     end
   end
@@ -963,6 +1025,10 @@ function process(key, env)
   end
 
   if plain and repr:match("^[a-z]$") then
+    -- S is shared by every session (one Lua state): a run with nothing composed here is another session's
+    if S.tracking and input == "" then
+      reset()
+    end
     if S.tracking then
       local raw = S.raw .. repr
       if can_extend(env, raw) and input:match("^[a-z]*$") then
@@ -1033,25 +1099,37 @@ function process(key, env)
   -- start a new run. Same safety rule as Space. english/hyphen: off = v0.5.2.
   if plain and kc == 0x2d and env.hyphen ~= "off" then
     local text = nil
-    if space_allowed(env, S.raw) and not chinese_held(ctx) then
+    if space_allowed(env, S.raw) and #S.raw > 2 and not chinese_held(ctx) then
       text = space_text(env, S.raw)
     end
-    if not text and (unknown_space_ok(env, ctx) or prefix_space_ok(env, ctx)) then
+    if not text and unknown_space_ok(env, ctx) then
       text = S.raw
     end
     if text then
       return hold_latin(env, ctx, text, "-", text .. "-")
     end
   end
+  -- 0.1.1: an apostrophe after a contraction stem waits for the next key (don't it's we're)
+  if plain and kc == 0x27 and APOS_STEM[S.raw] and not chinese_held(ctx) then
+    hold_latin(env, ctx, S.raw, "'", S.pending .. ctx:get_commit_text() .. "'")
+    env.latin_apos = true
+    return kAccepted
+  end
   -- v0.5.9: ] / } (」 』) end a word like , and . ([1 nudification ]1 typed 乙寸灼曾芍乞); keycode
   -- so Shift+bracketright (Linux / macOS) and Weasel's braceright both match
+  -- 0.1.1: Enter ? ! : ; ) too (hello Enter, /model Enter, thanks?); Enter commits with no newline, like Chinese
   local endkey = plain and (repr == "space" or repr == "comma" or repr == "period"
-    or kc == 0x5d or kc == 0x7d)
-  if endkey and space_allowed(env, S.raw) and not chinese_held(ctx) then
+    or repr == "Return" or kc == 0x5d or kc == 0x7d
+    or kc == 0x3f or kc == 0x21 or kc == 0x3a or kc == 0x3b or kc == 0x29)
+  if endkey and space_allowed(env, S.raw) and (#S.raw > 2 or repr == "space") and not chinese_held(ctx) then
     local text = space_text(env, S.raw)
     if text then
       if repr == "space" then
         commit_word(env, ctx, text .. " ")
+        return kAccepted
+      end
+      if repr == "Return" then
+        commit_word(env, ctx, text)
         return kAccepted
       end
       if kc == 0x2e then
@@ -1061,9 +1139,13 @@ function process(key, env)
       return kNoop -- the punctuator types the comma / period
     end
   end
-  if endkey and (unknown_space_ok(env, ctx) or prefix_space_ok(env, ctx)) then
+  if endkey and unknown_space_ok(env, ctx) then
     if repr == "space" then
       commit_word(env, ctx, S.raw .. " ")
+      return kAccepted
+    end
+    if repr == "Return" then
+      commit_word(env, ctx, S.raw)
       return kAccepted
     end
     if kc == 0x2e then
@@ -1091,8 +1173,7 @@ local function filter_func(input, env)
     local ctx = env.engine.context
     local mark = "⇧"
     if (space_allowed(env, S.raw) and not chinese_held(ctx)
-        and space_text(env, S.raw)) or unknown_space_ok(env, ctx)
-        or prefix_space_ok(env, ctx) then
+        and space_text(env, S.raw)) or unknown_space_ok(env, ctx) then
       mark = "␣"
     end
     local held = R.defer .. S.pending

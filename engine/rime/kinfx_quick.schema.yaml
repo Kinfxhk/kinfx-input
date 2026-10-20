@@ -269,5 +269,6 @@ recognizer:
     # v0.5.9：單碼後面即刻大楷（iPhone、eSIM、xAI）成串留拉丁，唔再頂成 戈Phone。
     uppercase: "^[a-z][A-Z][-_+.'0-9A-Za-z]*$|[A-Z][-_+.'0-9A-Za-z]*$"
     # v0.5.10：英文詞中間嘅「-」後面再有字母（bait-and-switch），成個詞留拉丁。
-    url: "^(www[.]|https?:|ftp[.:]|mailto:|file:).*$|[a-z]+[.].+$|^[a-z]+-[A-Za-z0-9][-.A-Za-z0-9]*$"
+    # 0.1.1：縮寫 don't／it's 成個詞留拉丁（english_mix.lua 嘅 APOS_STEM 先會留住 '）。
+    url: "^(www[.]|https?:|ftp[.:]|mailto:|file:).*$|[a-z]+[.].+$|^[a-z]+-[A-Za-z0-9][-.A-Za-z0-9]*$|^[A-Za-z]+'[a-z]+$"
     reverse_lookup: "`[a-z]*'?$"
