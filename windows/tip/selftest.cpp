@@ -64,6 +64,18 @@ int main() {
     Check(std::string(code) + " Ctrl+V commits held, app pastes", out + "/" + std::to_string(eaten), std::string(want) + "/0");
     kx_destroy(s);
   }
+  // 0.1.4 blur (F35 from OnCompositionTerminated): what was typed stays.
+  for (auto cw : {std::pair<const char *, const char *>{"hel", "hel"}, {"vdhel", "vdhel"}, {"vd", "\xe5\xa5\xbd"},
+                  {"vd1hel", "\xe5\xa5\xbdhel"}, {"ofca", "ofca"}, {"he", "\xe5\x8f\x8d"}}) {
+    s = kx_session("kinfx_quick");
+    std::string out;
+    for (const char *k = cw.first; *k; k++) { kx_key(s, *k, 0); out += Take(s); }
+    kx_key(s, 0xffe0, 0);
+    out += Take(s);
+    for (char k : std::string("vd1")) { kx_key(s, k, 0); out += Take(s); }
+    Check(std::string(cw.first) + " blur keeps text", out, std::string(cw.second) + "\xe5\xa5\xbd");
+    kx_destroy(s);
+  }
   for (const char *size : {"5", "9"}) {
     Sleep(1100);
     std::ofstream(kx::UserDir() + L"\\settings.json") << "{\"page_size\": " << size << "}";

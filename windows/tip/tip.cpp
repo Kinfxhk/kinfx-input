@@ -237,10 +237,26 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   STDMETHODIMP OnKeyUp(ITfContext *c, WPARAM w, LPARAM l, BOOL *eaten) override { *eaten = Handle(c, w, l, true); return S_OK; }
   STDMETHODIMP OnPreservedKey(ITfContext *, REFGUID, BOOL *eaten) override { *eaten = FALSE; return S_OK; }
 
-  STDMETHODIMP OnCompositionTerminated(TfEditCookie, ITfComposition *) override {
-    // The app ended the composition (click elsewhere): drop Rime's input to match.
-    if (comp_) { comp_->Release(); comp_ = nullptr; }
-    if (sess_) kx_clear(sess_);
+  STDMETHODIMP OnCompositionTerminated(TfEditCookie ec, ITfComposition *) override {
+    // The app ended the composition (click elsewhere): Rime commits what the user was typing
+    // (F35 = blur key in english_mix.lua: an English run as letters, Sucheng as Return gives),
+    // and that text replaces the preedit, so nothing typed disappears.
+    std::wstring commit;
+    if (sess_) {
+      kx_key(sess_, 0xffe0, 0);
+      char *raw = kx_take_commit(sess_);
+      commit = raw ? kx::Wide(raw) : L"";
+      free(raw);
+      kx_clear(sess_);
+    }
+    if (comp_) {
+      ITfRange *r;
+      HRESULT g = comp_->GetRange(&r), h = E_FAIL;
+      if (SUCCEEDED(g)) { h = r->SetText(ec, 0, commit.c_str(), (LONG)commit.size()); r->Release(); }
+      Trace("blur commit [" + kx::Utf8(commit) + "] range=" + std::to_string(g) + " set=" + std::to_string(h));
+      comp_->Release();
+      comp_ = nullptr;
+    }
     cand_.Hide();
     return S_OK;
   }
