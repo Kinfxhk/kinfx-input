@@ -349,6 +349,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     c->RequestEditSession(id_, es, TF_ES_SYNC | TF_ES_READWRITE, &hr);
     es->Release();
     if (cands.empty()) { cand_.Hide(); return; }
+    if (at.x < 0 && last_.x >= 0) at = last_;  // TSF gave no extent: stay where the preedit was
     if (at.x < 0) { GetCaretPos(&at); HWND fw = GetFocus(); if (fw) ClientToScreen(fw, &at); at.y += 24; }
     auto it = kx::Current().find("candidate_layout");
     cand_.Show(cands, at, it == kx::Current().end() || it->second != "horizontal");
@@ -379,6 +380,12 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
         comp_->Release();
         comp_ = nullptr;
       }
+      TF_SELECTION sel = {};
+      ULONG n = 0;
+      if (SUCCEEDED(c->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &sel, &n)) && n == 1 && sel.range) {
+        Below(ec, c, sel.range, at);
+        sel.range->Release();
+      }
       return;
     }
     if (!comp_) Begin(ec, c);
@@ -388,14 +395,21 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     r->SetText(ec, 0, pre.c_str(), (LONG)pre.size());
     ITfRange *end;
     if (SUCCEEDED(r->Clone(&end))) { end->Collapse(ec, TF_ANCHOR_END); SetSel(ec, c, end); end->Release(); }
-    ITfContextView *v;
-    if (SUCCEEDED(c->GetActiveView(&v))) {
-      RECT rc;
-      BOOL clipped;
-      if (SUCCEEDED(v->GetTextExt(ec, r, &rc, &clipped)) && (rc.left || rc.bottom)) { at->x = rc.left; at->y = rc.bottom + 2; }
-      v->Release();
-    }
+    Below(ec, c, r, at);
     r->Release();
+  }
+
+  // Screen point just below a text range, from the app's TSF view.
+  void Below(TfEditCookie ec, ITfContext *c, ITfRange *r, POINT *at) {
+    ITfContextView *v;
+    if (FAILED(c->GetActiveView(&v))) return;
+    RECT rc;
+    BOOL clipped;
+    if (SUCCEEDED(v->GetTextExt(ec, r, &rc, &clipped)) && (rc.left || rc.bottom)) {
+      at->x = rc.left; at->y = rc.bottom + 2;
+      last_ = *at;
+    }
+    v->Release();
   }
 
   void Begin(TfEditCookie ec, ITfContext *c) {
@@ -425,6 +439,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   TfClientId id_ = 0;
   uintptr_t sess_ = 0;
   ITfComposition *comp_ = nullptr;
+  POINT last_ = {-1, -1};
   CandWin cand_;
   bool pending_ = false, pendUp_ = false, pendEaten_ = false, paste_ = false;
   WPARAM pendW_ = 0;
