@@ -1,5 +1,5 @@
 ; KINFX Input Windows installer (Inno Setup 6). Built by build.cmd from windows\build\stage.
-#define Ver "0.1.3"
+#define Ver "0.1.4"
 [Setup]
 AppId={{D71D8CE6-CDFB-4F06-B416-5C60A93B7FE0}
 AppName=KINFX Input

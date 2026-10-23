@@ -792,7 +792,38 @@ local function dot_key(env, key)
   return letter and kAccepted or nil
 end
 
+-- 0.1.4: focus left the text (click elsewhere, window switch). The shell sends
+-- F35 (no keyboard has it) and writes the commit before it ends the composition.
+-- An English run gives what a Left Shift tap gives (hel -> hel), anything else
+-- what Return gives (vd -> 好, ofc -> 人類, as Microsoft Quick commits on blur).
+local BLUR = 0xffe0
+local function blur(env)
+  local ctx = env.engine.context
+  if (ctx.input or "") ~= "" then
+    local english = env.smart and (env.latin or env.dot or latin_token(ctx) or R.alive
+      or (S.tracking and #S.raw >= 3 and not chinese_held(ctx)))
+    if english then
+      env.shift_down, env.shift_used = false, false
+      env.engine:process_key(KeyEvent("Shift_L"))
+      env.engine:process_key(KeyEvent("Release+Shift_L"))
+    else
+      env.engine:process_key(KeyEvent("Return"))
+    end
+  end
+  rescue_end(env)
+  flush(env)
+  env.latin, env.latin_apos, env.dot = nil, false, nil
+  S.guard = true
+  ctx:clear()
+  S.guard = false
+  reset()
+  return kAccepted
+end
+
 local function func(key, env)
+  if key.keycode == BLUR and not key:release() then
+    return blur(env)
+  end
   local r0 = dot_key(env, key)
   if r0 then
     return r0

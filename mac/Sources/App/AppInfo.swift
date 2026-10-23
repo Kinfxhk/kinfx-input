@@ -2,7 +2,7 @@ import Cocoa
 
 // About / help / donate text comes from app-info.json (shared by every shell).
 struct AppInfo {
-  var version = "0.1.3"
+  var version = "0.1.4"
   var about = ""
   var help: [String] = []
   var donateURL = ""   // legacy single link; unused when donate_links is set
