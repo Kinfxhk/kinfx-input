@@ -176,8 +176,8 @@ english:
 association:
   enable: true
   max: 36
-  # 揀字後第一下空白：type＝關聯想再打空格（中英混打順）｜page＝Windows（翻聯想頁、吞咗）
-  space: type
+  # 揀字後第一下空白：page＝Windows（翻聯想頁、吞咗，預設：速成行為優先）｜type＝關聯想再打空格
+  space: page
 
 assoc_translator:
   tag: kinfx_assoc

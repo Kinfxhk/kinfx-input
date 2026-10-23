@@ -436,7 +436,7 @@ local function read_env(env)
   env.space_mode = config_str(config, "english/space", "safe")
   -- association/space: type (Space closes the list and types a space) | page
   -- (Windows: Space pages the list and is swallowed).
-  env.assoc_space = config_str(config, "association/space", "type")
+  env.assoc_space = config_str(config, "association/space", "page")
   -- association/paren_pick: false (default) = Shift+9 after a pick types （ and
   -- closes the list (HKEPC: 遊戲越獄（ came out 越獄訟) | true = Shift+9 picks slot 9.
   env.paren_pick = pm.config_bool(config, "association/paren_pick", false)

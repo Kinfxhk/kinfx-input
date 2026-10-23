@@ -18,7 +18,7 @@ enum Settings {
     SettingSpec(key: "association", label: "聯想詞",
                 options: [("true", "開啟"), ("false", "關閉")], rimeKey: "association/enable"),
     SettingSpec(key: "space_after_pick", label: "選字後按空白",
-                options: [("type", "輸入空格"), ("page", "翻頁")], rimeKey: "association/space"),
+                options: [("page", "翻頁"), ("type", "輸入空格")], rimeKey: "association/space"),
     SettingSpec(key: "phrase_capture", label: "常用詞前綴",
                 options: [("hot", "熱門"), ("all", "全部"), ("off", "關閉")], rimeKey: "phrase_mix/capture"),
     SettingSpec(key: "empty_shift", label: "未輸入時按左 Shift",
