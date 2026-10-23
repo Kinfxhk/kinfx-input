@@ -65,6 +65,12 @@ char *kx_take_commit(uintptr_t s) {
   return out;
 }
 
+char *kx_property(uintptr_t s, const char *key) {
+  char buf[4096];
+  if (!api || !api->get_property((RimeSessionId)s, key, buf, sizeof buf)) return NULL;
+  return strdup(buf);
+}
+
 static void append(char **buf, size_t *len, size_t *cap, const char *s) {
   size_t n = s ? strlen(s) : 0;
   if (*len + n + 1 > *cap) {

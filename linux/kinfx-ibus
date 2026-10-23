@@ -42,7 +42,15 @@ class KxEngine(IBus.Engine):
         if text:
             self.commit_text(IBus.Text.new_from_string(text))
         pre, cur, page, cands = ENGINE.view(self.sess)
-        self.update_preedit_text(IBus.Text.new_from_string(pre), cur, bool(pre))
+        # Focus out / reset: ibus (daemon, or the GTK client) commits a COMMIT-mode preedit into the
+        # field being left; an engine commit_text there lands in the next field (one global engine).
+        # So the preedit is what blur keeps (vd -> \u597d); the code still shows as auxiliary text.
+        shown = ENGINE.blur_text(self.sess)
+        if shown and shown != pre:
+            cur = len(shown)
+        self.update_auxiliary_text(IBus.Text.new_from_string(pre), bool(shown) and shown != pre)
+        self.update_preedit_text_with_mode(IBus.Text.new_from_string(shown or pre), cur, bool(shown or pre),
+                                           IBus.PreeditFocusMode.COMMIT if shown else IBus.PreeditFocusMode.CLEAR)
         if not cands:
             self.hide_lookup_table()
             return
@@ -61,8 +69,9 @@ class KxEngine(IBus.Engine):
         ENGINE.reload_if_changed()
 
     def do_focus_out(self):
-        if self.sess:
+        if self.sess:  # ibus already committed the COMMIT-mode preedit (_update)
             ENGINE.lib.kx_clear(self.sess)
+            ENGINE.commit(self.sess)  # drop: clearing flushes held top-outs, already in that preedit
         self.update_preedit_text(IBus.Text.new_from_string(""), 0, False)
         self.hide_lookup_table()
 

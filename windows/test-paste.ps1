@@ -1,4 +1,4 @@
-# Real-key 0.1.2 check on the VM desktop (run via vm/launch.ps1 as the logged-in user).
+﻿# Real-key 0.1.2 check on the VM desktop (run via vm/launch.ps1 as the logged-in user).
 # Clipboard = PASTE, then for each case: Esc, clear the box, type keys through KINFX (TSF + SendInput),
 # record the text box raw, Esc again and record what stayed committed.
 # Tokens: {SP} {ENTER} {ESC} {CV}=Ctrl+V {S1}=Shift+1; other chars typed literally.
@@ -16,6 +16,7 @@ public static class KI {
   [DllImport("user32.dll")] static extern uint SendInput(uint n, INPUT[] i, int size);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);
   public static void Key(ushort vk, ushort mod) {
     var l = new System.Collections.Generic.List<INPUT>();
     Action<ushort,uint> add = (v, f) => { var x = new INPUT(); x.type = 1; x.ki.wVk = v; x.ki.dwFlags = f; l.Add(x); };
@@ -79,6 +80,7 @@ $f.Controls.Add($t)
 $tm = New-Object Windows.Forms.Timer
 $tm.Interval = 1500
 $f.Add_Shown({
+  [void][KI]::ShowWindow($f.Handle, 5)  # hidden.vbs launches with SW_HIDE
   [void][KI]::SetForegroundWindow($f.Handle); $f.Activate(); [void]$t.Focus()
   [void]$log.Add('activate hr=' + [KxTsf]::UseKinfx())
   $tm.Start()

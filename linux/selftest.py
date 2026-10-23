@@ -64,6 +64,22 @@ for name, keys, want in [
 ]:
     check(name, type_keys(keys)[0], want)
 
+# 0.1.4 blur (F35 from do_focus_out): what was typed stays; same vectors as windows/tip/selftest.cpp
+for code, want in [("hel", "hel"), ("vdhel", "vdhel"), ("vd", "\u597d"),
+                   ("vd1hel", "\u597dhel"), ("ofca", "ofca"), ("he", "\u53cd")]:
+    check(code + " blur keeps text", type_keys(codes(code) + [0xffe0] + codes("vd1"))[0], want + "\u597d")
+
+# kinfx_blur property (IBus shows it as the COMMIT-mode preedit) == what F35 then commits
+for code in ("hel", "vdhel", "vd", "vd1hel", "ofca", "he", "hello", "openai.co", "llama.c", "iPhone"):
+    s = E.session()
+    for c in code:
+        E.key(s, ord(c), 0)
+        E.commit(s)
+    before = E.blur_text(s)
+    E.key(s, 0xffe0, 0)
+    check(code + " kinfx_blur == F35 commit", before, E.commit(s) or "")
+    E.lib.kx_destroy(s)
+
 for size in ("5", "9"):
     v = dict(E.settings, page_size=size)
     time.sleep(1.1)  # settings.json mtime must change

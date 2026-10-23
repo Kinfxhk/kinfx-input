@@ -91,6 +91,8 @@ class Engine:
         for n in ("kx_take_commit", "kx_context"):
             getattr(lib, n).argtypes = [ctypes.c_size_t]
             getattr(lib, n).restype = ctypes.c_void_p
+        lib.kx_property.argtypes = [ctypes.c_size_t, ctypes.c_char_p]
+        lib.kx_property.restype = ctypes.c_void_p
         self.lib = lib
         self.libc = ctypes.CDLL(None)
         self.libc.free.argtypes = [ctypes.c_void_p]
@@ -160,6 +162,10 @@ class Engine:
 
     def commit(self, s):
         return self._take(self.lib.kx_take_commit(s))
+
+    def blur_text(self, s):
+        """What F35 (focus left) would commit now; english_mix.lua keeps it in a context property."""
+        return self._take(self.lib.kx_property(s, b"kinfx_blur")) or ""
 
     def view(self, s):
         """(preedit, cursor_chars, page_size, candidates[(text, comment)])"""

@@ -12,5 +12,6 @@ int kx_key(uintptr_t s, int keycode, int mask);
 int kx_commit_composition(uintptr_t s);
 char *kx_take_commit(uintptr_t s);  // caller frees
 char *kx_context(uintptr_t s);      // caller frees
+char *kx_property(uintptr_t s, const char *key);  // caller frees
 
 #endif
