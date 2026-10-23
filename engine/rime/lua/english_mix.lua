@@ -486,11 +486,17 @@ local function read_env(env)
   end
 end
 
+local blur_text -- below blur()
+
 local function init(env)
   pm.init(env)
   read_env(env)
   env.shift_down = false
   reset()
+  -- 0.1.4: what F35 would commit, kept up to date for shells that hand it over before focus leaves (IBus)
+  env.blur_conn = env.engine.context.update_notifier:connect(function(c)
+    c:set_property("kinfx_blur", blur_text(env, c))
+  end)
   if not env.smart then
     return
   end
@@ -518,6 +524,9 @@ local function init(env)
 end
 
 local function fini(env)
+  if env.blur_conn then
+    env.blur_conn:disconnect()
+  end
   if env.commit_conn then
     env.commit_conn:disconnect()
   end
@@ -797,12 +806,15 @@ end
 -- An English run gives what a Left Shift tap gives (hel -> hel), anything else
 -- what Return gives (vd -> 好, ofc -> 人類, as Microsoft Quick commits on blur).
 local BLUR = 0xffe0
+local function blur_english(env, ctx)
+  return env.smart and (env.latin or env.dot or latin_token(ctx) or R.alive
+    or (S.tracking and #S.raw >= 3 and not chinese_held(ctx)))
+end
+
 local function blur(env)
   local ctx = env.engine.context
   if (ctx.input or "") ~= "" then
-    local english = env.smart and (env.latin or env.dot or latin_token(ctx) or R.alive
-      or (S.tracking and #S.raw >= 3 and not chinese_held(ctx)))
-    if english then
+    if blur_english(env, ctx) then
       env.shift_down, env.shift_used = false, false
       env.engine:process_key(KeyEvent("Shift_L"))
       env.engine:process_key(KeyEvent("Release+Shift_L"))
@@ -818,6 +830,32 @@ local function blur(env)
   S.guard = false
   reset()
   return kAccepted
+end
+
+-- What blur() commits, read without committing: the Left Shift tap paths in
+-- dispatch / process for an English run, else the Return path (top-outs, then the composition).
+function blur_text(env, ctx)
+  local input = ctx.input or ""
+  if input == "" then
+    return ""
+  end
+  if not blur_english(env, ctx) then
+    return S.pending .. ctx:get_commit_text()
+  end
+  if env.latin then
+    return input
+  end
+  local run = S.tracking and S.raw ~= ""
+  if R.alive and not (run and word_known(env, S.raw)) then
+    return R.raw
+  end
+  if run then
+    return R.defer .. shift_text(env, S.raw)
+  end
+  if input:match("^[a-z]+$") and not ctx:get_option("ascii_mode") then
+    return R.defer .. input
+  end
+  return R.defer .. S.pending .. ctx:get_commit_text()
 end
 
 local function func(key, env)
@@ -1240,6 +1278,11 @@ local function filter_func(input, env)
 end
 
 return {
-  processor = { init = init, func = func, fini = fini },
+  processor = { init = init, fini = fini, func = function(key, env)
+    local r = func(key, env)
+    local ctx = env.engine.context
+    ctx:set_property("kinfx_blur", blur_text(env, ctx))
+    return r
+  end },
   filter = { init = filter_init, func = filter_func },
 }

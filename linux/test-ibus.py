@@ -92,5 +92,58 @@ pump(0.3)
 got = "".join(out)
 print("%s %r: got %r want %r" % ("PASS" if got == "\u597d\u53cd" else "FAIL", "vdhel ctrl+v", got, "\u597d\u53cd"))
 ok = ok and got == "\u597d\u53cd"
+
+# 0.1.4: what was typed stays in the field being left (COMMIT-mode preedit), never in the next one
+ic2 = bus.create_input_context("kx-test2")
+ic2.set_capabilities(IBus.Capabilite.PREEDIT_TEXT | IBus.Capabilite.LOOKUP_TABLE | IBus.Capabilite.FOCUS)
+out2 = []
+ic2.connect("commit-text", lambda _ic, t: out2.append(t.get_text()))
+for keys, want, leave in [("hel", "hel", "focus"), ("vdhel", "vdhel", "focus"), ("vd", "\u597d", "focus"),
+                          ("vdhel", "vdhel", "reset")]:
+    out.clear()
+    out2.clear()
+    for c in keys:
+        send(ord(c))
+    if leave == "focus":
+        ic.focus_out()  # a click into another field: the client sends focus-out, then the new field focus-in
+        ic2.focus_in()
+    else:
+        ic.reset()  # click inside the same field
+    pump(0.5)
+    got = ("".join(out), "".join(out2))
+    print("%s %r %s: got %r want %r" % ("PASS" if got == (want, "") else "FAIL", keys, leave, got, (want, "")))
+    ok = ok and got == (want, "")
+    if leave == "focus":
+        ic.focus_in()
+        pump(0.5)
+# nothing typed: leaving commits nothing
+out.clear()
+out2.clear()
+ic.focus_out()
+ic2.focus_in()
+pump(0.5)
+got = ("".join(out), "".join(out2))
+print("%s empty focus: got %r want %r" % ("PASS" if got == ("", "") else "FAIL", got, ("", "")))
+ok = ok and got == ("", "")
+
+# GTK clients (client_commit_preedit) commit the COMMIT-mode preedit themselves on focus-out:
+# the last preedit they hold must be the blur text in COMMIT mode
+ic3 = bus.create_input_context("kx-test3")
+ic3.set_capabilities(IBus.Capabilite.PREEDIT_TEXT | IBus.Capabilite.LOOKUP_TABLE | IBus.Capabilite.FOCUS)
+ic3.set_client_commit_preedit(True)
+pre3 = []
+ic3.connect("update-preedit-text-with-mode", lambda _ic, t, c, v, m: pre3.append((t.get_text(), v, int(m))))
+ic3.focus_in()
+pump(0.5)
+for c in "vd":
+    ic3.process_key_event(ord(c), 0, 0)
+    ic3.process_key_event(ord(c), 0, IBus.ModifierType.RELEASE_MASK)
+    pump(0.15)
+got = pre3[-1] if pre3 else None
+want = ("\u597d", True, int(IBus.PreeditFocusMode.COMMIT))
+print("%s 'vd' client preedit: got %r want %r" % ("PASS" if got == want else "FAIL", got, want))
+ok = ok and got == want
+ic3.focus_out()
+pump(0.3)
 print("ALL PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)
