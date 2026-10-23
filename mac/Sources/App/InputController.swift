@@ -97,8 +97,14 @@ final class KINFXInputController: IMKInputController {
 
   override func commitComposition(_ sender: Any!) {
     guard session != 0, let client = sender as? IMKTextInput else { return }
-    engine.commitComposition(session)
-    update(client)
+    blur(client)
+  }
+
+  private func blur(_ client: IMKTextInput) {
+    let text = engine.blur(session) ?? ""
+    Trace.log("  blur commit [\(text)]")
+    client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+    AppDelegate.panel.hide()
   }
 
   override func activateServer(_ sender: Any!) {
@@ -108,11 +114,7 @@ final class KINFXInputController: IMKInputController {
   }
 
   override func deactivateServer(_ sender: Any!) {
-    if session != 0, let client = sender as? IMKTextInput {
-      engine.commitComposition(session)
-      update(client)
-      engine.clear(session)
-    }
+    if session != 0, let client = sender as? IMKTextInput { blur(client) }
     AppDelegate.panel.hide()
     super.deactivateServer(sender)
   }
