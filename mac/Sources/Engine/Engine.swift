@@ -109,7 +109,14 @@ final class Engine {
   func destroy(_ s: UInt) { kx_destroy(UInt(s)) }
   func clear(_ s: UInt) { kx_clear(UInt(s)) }
   func key(_ s: UInt, _ code: Int32, _ mask: Int32) -> Bool { kx_key(UInt(s), code, mask) != 0 }
-  func commitComposition(_ s: UInt) { _ = kx_commit_composition(UInt(s)) }
+  // 0.1.4 focus left (click elsewhere, app switch): F35 makes english_mix.lua commit what was typed
+  // (English letters as typed, Sucheng as Return gives), then Rime is cleared.
+  func blur(_ s: UInt) -> String? {
+    _ = kx_key(UInt(s), 0xffe0, 0)
+    let text = takeCommit(s)
+    kx_clear(UInt(s))
+    return text
+  }
 
   func takeCommit(_ s: UInt) -> String? {
     guard let p = kx_take_commit(UInt(s)) else { return nil }

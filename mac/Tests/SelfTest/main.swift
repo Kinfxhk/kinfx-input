@@ -127,5 +127,15 @@ check("plain code drops before Ctrl+V", { () -> String in
 }(), "")
 check("ofc1", type("ofc1").commit, "\u{4EBA}\u{985E}")
 
+// 0.1.4: focus left (F35) keeps what was typed, then vd1 still types.
+for (keys, want) in [("hel", "hel"), ("vdhel", "vdhel"), ("vd", "\u{597D}"), ("vd1hel", "\u{597D}hel"), ("ofca", "ofca"), ("he", "\u{53CD}")] {
+  let sess = engine.newSession(); defer { engine.destroy(sess) }
+  var out = ""
+  for ch in keys.unicodeScalars { _ = engine.key(sess, Int32(ch.value), 0); if let c = engine.takeCommit(sess) { out += c } }
+  out += engine.blur(sess) ?? ""
+  for k: Int32 in [0x76, 0x64, 0x31] { _ = engine.key(sess, k, 0); if let c = engine.takeCommit(sess) { out += c } }
+  check("\(keys) blur keeps text", out, want + "\u{597D}")
+}
+
 print(failures == 0 ? "ALL PASS" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)
