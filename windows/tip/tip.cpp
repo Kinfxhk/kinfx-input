@@ -89,19 +89,28 @@ class CandWin {
     if (!hwnd_) Create();
     items_ = items;
     vertical_ = vertical;
+    // The window lives in the host app's thread: GetDpiForWindow is 96 in DPI-unaware apps (Windows
+    // stretches the window itself), the system DPI in system-aware ones, the monitor's in per-monitor ones.
+    SetWindowPos(hwnd_, HWND_TOPMOST, at.x, at.y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
+    int dpi = (int)GetDpiForWindow(hwnd_);
+    if (dpi != dpi_ || !font_) {
+      if (font_) DeleteObject(font_);
+      dpi_ = dpi;
+      font_ = CreateFontW(-S(kFontPx), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Microsoft JhengHei UI");
+    }
     HDC dc = GetDC(hwnd_);
     HGDIOBJ old = SelectObject(dc, font_);
     int w = 0, h = 0;
     for (auto &s : items_) {
       SIZE sz;
       GetTextExtentPoint32W(dc, s.c_str(), (int)s.size(), &sz);
-      lineH_ = sz.cy + 6;
+      lineH_ = sz.cy + S(8);
       if (vertical_) { w = max(w, (int)sz.cx); h += lineH_; }
-      else { w += sz.cx + 16; h = lineH_; }
+      else { w += sz.cx + S(20); h = lineH_; }
     }
     SelectObject(dc, old);
     ReleaseDC(hwnd_, dc);
-    SetWindowPos(hwnd_, HWND_TOPMOST, at.x, at.y, w + 20, h + 8, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    SetWindowPos(hwnd_, HWND_TOPMOST, at.x, at.y, w + S(28), h + S(12), SWP_NOACTIVATE | SWP_SHOWWINDOW);
     InvalidateRect(hwnd_, nullptr, TRUE);
   }
   void Hide() { if (hwnd_) ShowWindow(hwnd_, SW_HIDE); }
@@ -122,7 +131,6 @@ class CandWin {
     hwnd_ = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, L"KINFXInputCand", L"", WS_POPUP | WS_BORDER,
                             0, 0, 10, 10, nullptr, nullptr, g_hinst, nullptr);
     SetWindowLongPtrW(hwnd_, GWLP_USERDATA, (LONG_PTR)this);
-    font_ = CreateFontW(-18, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Microsoft JhengHei UI");
   }
   static LRESULT CALLBACK Proc(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (m == WM_MOUSEACTIVATE) return MA_NOACTIVATE;
@@ -138,11 +146,11 @@ class CandWin {
       SetBkMode(dc, TRANSPARENT);
       SetTextColor(dc, RGB(0xee, 0xe6, 0xdc));
       HGDIOBJ old = SelectObject(dc, self->font_);
-      int x = 10, y = 4;
+      int x = self->S(14), y = self->S(6);
       for (auto &s : self->items_) {
         TextOutW(dc, x, y, s.c_str(), (int)s.size());
         if (self->vertical_) y += self->lineH_;
-        else { SIZE sz; GetTextExtentPoint32W(dc, s.c_str(), (int)s.size(), &sz); x += sz.cx + 16; }
+        else { SIZE sz; GetTextExtentPoint32W(dc, s.c_str(), (int)s.size(), &sz); x += sz.cx + self->S(20); }
       }
       SelectObject(dc, old);
       EndPaint(h, &ps);
@@ -155,6 +163,9 @@ class CandWin {
   std::vector<std::wstring> items_;
   bool vertical_ = true;
   int lineH_ = 24;
+  int dpi_ = 0;
+  static const int kFontPx = 24;  // px at 96 DPI (0.1.3: a fixed 18 px, never DPI-scaled)
+  int S(int px) const { return MulDiv(px, dpi_ ? dpi_ : 96, 96); }
 };
 
 // ---------- edit session helper ----------
