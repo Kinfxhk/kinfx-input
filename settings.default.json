@@ -6,5 +6,5 @@
   "page_size": 9,
   "phrase_capture": "hot",
   "preedit": "letters",
-  "space_after_pick": "type"
+  "space_after_pick": "page"
 }

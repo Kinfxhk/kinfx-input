@@ -8,7 +8,7 @@
     {"key": "association", "label": "聯想詞", "rime_key": "association/enable",
      "options": [["true", "開啟"], ["false", "關閉"]]},
     {"key": "space_after_pick", "label": "選字後按空白", "rime_key": "association/space",
-     "options": [["type", "輸入空格"], ["page", "翻頁"]]},
+     "options": [["page", "翻頁"], ["type", "輸入空格"]]},
     {"key": "phrase_capture", "label": "常用詞前綴", "rime_key": "phrase_mix/capture",
      "options": [["hot", "熱門"], ["all", "全部"], ["off", "關閉"]], "rime_value": {"off": "none"}},
     {"key": "empty_shift", "label": "未輸入時按左 Shift", "rime_key": "english/empty_shift",

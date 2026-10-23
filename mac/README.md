@@ -17,7 +17,7 @@
 
 只有設定視窗會寫 `settings.json`，程式再由佢生成 `kinfx_quick.custom.yaml`，用戶唔會見到 yaml 或者 lua。欄位喺 `Settings.specs`，其他平台嘅殼都用同一套 key 同值：
 
-`page_size` 9/5 · `english_space` safe/long/off · `association` true/false · `space_after_pick` type/page · `phrase_capture` hot/all/off · `empty_shift` noop/ascii · `preedit` letters/radicals
+`page_size` 9/5 · `english_space` safe/long/off · `association` true/false · `space_after_pick` page/type · `phrase_capture` hot/all/off · `empty_shift` noop/ascii · `preedit` letters/radicals
 
 ## 建置（唔使 Xcode，Command Line Tools 就得）
 
