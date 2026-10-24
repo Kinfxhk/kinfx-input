@@ -17,7 +17,7 @@ int kx_start(const char *shared_dir, const char *user_dir, const char *log_dir, 
   t.user_data_dir = user_dir;
   t.distribution_name = "KINFX Input";
   t.distribution_code_name = "kinfx-input";
-  t.distribution_version = "0.1.4";
+  t.distribution_version = "0.1.5";
   t.app_name = "rime.kinfx-input";
   t.min_log_level = 1;
   t.log_dir = log_dir;
