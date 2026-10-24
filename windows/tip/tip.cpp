@@ -85,7 +85,7 @@ static int KeySym(WPARAM vk, LPARAM lp) {
 // ---------- candidate window ----------
 class CandWin {
  public:
-  void Show(const std::vector<std::wstring> &items, POINT at, bool vertical) {
+  void Show(const std::vector<std::wstring> &items, POINT at, int lineAbove, bool vertical) {
     if (!hwnd_) Create();
     items_ = items;
     vertical_ = vertical;
@@ -110,7 +110,15 @@ class CandWin {
     }
     SelectObject(dc, old);
     ReleaseDC(hwnd_, dc);
-    SetWindowPos(hwnd_, HWND_TOPMOST, at.x, at.y, w + S(28), h + S(12), SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    int ww = w + S(28), wh = h + S(12);
+    MONITORINFO mi = {sizeof mi};
+    if (GetMonitorInfoW(MonitorFromPoint(at, MONITOR_DEFAULTTONEAREST), &mi)) {
+      RECT wa = mi.rcWork;
+      if (at.y + wh > wa.bottom) at.y = max(wa.top, at.y - lineAbove - 4 - wh);  // no room below: above the text line
+      if (at.x + ww > wa.right) at.x = max(wa.left, wa.right - ww);
+      if (at.x < wa.left) at.x = wa.left;
+    }
+    SetWindowPos(hwnd_, HWND_TOPMOST, at.x, at.y, ww, wh, SWP_NOACTIVATE | SWP_SHOWWINDOW);
     InvalidateRect(hwnd_, nullptr, TRUE);
   }
   void Hide() { if (hwnd_) ShowWindow(hwnd_, SW_HIDE); }
@@ -344,19 +352,20 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     if (!commit.empty()) Trace("commit [" + kx::Utf8(commit) + "]");
     if (!cands.empty()) Trace("view page=" + (f.size() > 2 ? f[2] : "") + " n=" + std::to_string(cands.size()) + " pre=[" + f[0] + "] raw=[" + Hex(f.size() > 6 ? f[6] : "") + "]");
     POINT at = {-1, -1};
-    auto *es = new EditSession([&](TfEditCookie ec) { Write(ec, c, commit, pre, &at); });
+    int lineH = 0;
+    auto *es = new EditSession([&](TfEditCookie ec) { Write(ec, c, commit, pre, &at, &lineH); });
     HRESULT hr;
     c->RequestEditSession(id_, es, TF_ES_SYNC | TF_ES_READWRITE, &hr);
     es->Release();
     if (cands.empty()) { cand_.Hide(); return; }
-    if (at.x < 0 && last_.x >= 0) at = last_;  // TSF gave no extent: stay where the preedit was
-    if (at.x < 0) { GetCaretPos(&at); HWND fw = GetFocus(); if (fw) ClientToScreen(fw, &at); at.y += 24; }
+    if (at.x < 0 && last_.x >= 0) { at = last_; lineH = lastH_; }  // TSF gave no extent: stay where the preedit was
+    if (at.x < 0) { GetCaretPos(&at); HWND fw = GetFocus(); if (fw) ClientToScreen(fw, &at); at.y += 24; lineH = 24; }
     auto it = kx::Current().find("candidate_layout");
-    cand_.Show(cands, at, it == kx::Current().end() || it->second != "horizontal");
+    cand_.Show(cands, at, lineH, it == kx::Current().end() || it->second != "horizontal");
   }
 
   // Commit text and/or preedit through one TSF composition.
-  void Write(TfEditCookie ec, ITfContext *c, const std::wstring &commit, const std::wstring &pre, POINT *at) {
+  void Write(TfEditCookie ec, ITfContext *c, const std::wstring &commit, const std::wstring &pre, POINT *at, int *lineH) {
     if (!commit.empty()) {
       if (!comp_) Begin(ec, c);
       if (comp_) {
@@ -383,7 +392,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
       TF_SELECTION sel = {};
       ULONG n = 0;
       if (SUCCEEDED(c->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &sel, &n)) && n == 1 && sel.range) {
-        Below(ec, c, sel.range, at);
+        Below(ec, c, sel.range, at, lineH);
         sel.range->Release();
       }
       return;
@@ -395,19 +404,20 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     r->SetText(ec, 0, pre.c_str(), (LONG)pre.size());
     ITfRange *end;
     if (SUCCEEDED(r->Clone(&end))) { end->Collapse(ec, TF_ANCHOR_END); SetSel(ec, c, end); end->Release(); }
-    Below(ec, c, r, at);
+    Below(ec, c, r, at, lineH);
     r->Release();
   }
 
   // Screen point just below a text range, from the app's TSF view.
-  void Below(TfEditCookie ec, ITfContext *c, ITfRange *r, POINT *at) {
+  void Below(TfEditCookie ec, ITfContext *c, ITfRange *r, POINT *at, int *lineH) {
     ITfContextView *v;
     if (FAILED(c->GetActiveView(&v))) return;
     RECT rc;
     BOOL clipped;
     if (SUCCEEDED(v->GetTextExt(ec, r, &rc, &clipped)) && (rc.left || rc.bottom)) {
       at->x = rc.left; at->y = rc.bottom + 2;
-      last_ = *at;
+      *lineH = rc.bottom - rc.top;
+      last_ = *at; lastH_ = *lineH;
     }
     v->Release();
   }
@@ -440,6 +450,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   uintptr_t sess_ = 0;
   ITfComposition *comp_ = nullptr;
   POINT last_ = {-1, -1};
+  int lastH_ = 0;
   CandWin cand_;
   bool pending_ = false, pendUp_ = false, pendEaten_ = false, paste_ = false;
   WPARAM pendW_ = 0;

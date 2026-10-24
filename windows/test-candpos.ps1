@@ -18,6 +18,8 @@ public static class KP {
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindow(string c, string n);
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);
   public static void Key(ushort vk, ushort mod) {
     var l = new System.Collections.Generic.List<INPUT>();
     Action<ushort,uint> add = (v, f) => { var x = new INPUT(); x.type = 1; x.ki.wVk = v; x.ki.dwFlags = f; l.Add(x); };
@@ -46,11 +48,21 @@ New-Item -ItemType File -Force (Join-Path $ud 'trace-on') | Out-Null
 Remove-Item (Join-Path $ud 'log\kx-trace.log') -EA SilentlyContinue
 $root = [Windows.Automation.AutomationElement]::RootElement
 function Find($cond) { for ($i = 0; $i -lt 15; $i++) { $e = $root.FindFirst([Windows.Automation.TreeScope]::Descendants, $cond); if ($e) { return $e }; Start-Sleep 1 }; return $null }
-if ($App -eq 'notepad') {
+if ($App -like 'edge*') {} elseif ($App -ne 'notepad') {
+  $wa = [Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+  $f = New-Object Windows.Forms.Form; $f.Text = 'kx-edge'; $f.StartPosition = 'Manual'; $f.FormBorderStyle = 'None'; $f.TopMost = $true
+  if ($App -eq 'bottom') { $f.SetBounds($wa.Left + 300, $wa.Bottom - 90, 700, 90) } else { $f.SetBounds($wa.Right - 260, $wa.Top + 300, 260, 300) }
+  $tb = New-Object Windows.Forms.TextBox; $tb.Multiline = $true; $tb.Dock = 'Fill'; $tb.Font = New-Object Drawing.Font('Microsoft JhengHei UI', 14); $tb.AccessibleName = 'boxa'; $f.Controls.Add($tb)
+  $f.Show(); [void][KP]::ShowWindow($f.Handle, 5); [Windows.Forms.Application]::DoEvents(); Start-Sleep 1
+  [void][KP]::SetForegroundWindow($f.Handle); $f.Activate(); [void]$tb.Focus()
+  $box = [Windows.Automation.AutomationElement]::FromHandle($tb.Handle)
+  [void]$log.Add('workarea=' + $wa + ' form=' + $f.Bounds)
+} elseif ($App -eq 'notepad') {
   Get-Process notepad -EA SilentlyContinue | Stop-Process -Force; Start-Sleep 1
   Start-Process notepad; Start-Sleep 4
   $box = Find (New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ClassNameProperty, 'RichEditD2DPT'))
-} else {
+}
+if ($App -like 'edge*') {
   $html = "$inst\kx-pos.html"
   Set-Content $html '<html><body style="margin:80px"><textarea aria-label="boxa" style="width:700px;height:300px;font-size:20px"></textarea></body></html>' -Encoding UTF8
   Get-Process msedge -EA SilentlyContinue | Stop-Process -Force; Start-Sleep 2
@@ -66,17 +78,18 @@ foreach ($ln in 1..3) { foreach ($c in 'iPhone '.ToCharArray()) { if ($c -eq ' '
 foreach ($c in 'iPhone '.ToCharArray()) { if ($c -eq ' ') { [KP]::Key(0x20, 0) } elseif ($c -cmatch '[A-Z]') { [KP]::Key([uint16][int]$c, 0x10) } else { [KP]::Key([uint16][int][char]([string]$c).ToUpper(), 0) }; Start-Sleep -Milliseconds 60 }
 $hr = [KP]::Use(); Start-Sleep -Milliseconds 300
 [void]$log.Add('use hr=' + $hr)
+$pump = { for ($i = 0; $i -lt 30; $i++) { [Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 15 } }
 $shot = { param($n) $b = [Windows.Forms.Screen]::PrimaryScreen.Bounds; $bmp = New-Object Drawing.Bitmap $b.Width, $b.Height; $g = [Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($b.Location, [Drawing.Point]::Empty, $b.Size); $bmp.Save("$inst\kx-pos-$App-$n.png") }
-[KP]::Key(0x56, 0); Start-Sleep -Milliseconds 150; [KP]::Key(0x44, 0); Start-Sleep -Milliseconds 500
+[KP]::Key(0x56, 0); & $pump; [KP]::Key(0x44, 0); & $pump; & $pump
 [void]$log.Add('after vd: ' + [KP]::Cand()); & $shot 1
-[KP]::Key(0x31, 0); Start-Sleep -Milliseconds 500
+[KP]::Key(0x31, 0); & $pump; & $pump
 [void]$log.Add('after vd1: ' + [KP]::Cand()); & $shot 2
-[KP]::Key(0x20, 0); Start-Sleep -Milliseconds 400
+[KP]::Key(0x20, 0); & $pump
 [void]$log.Add('after vd1 Space: ' + [KP]::Cand())
 [KP]::Key(0x1B, 0); Start-Sleep -Milliseconds 200
 $tr = Join-Path $ud 'log\kx-trace.log'
 if (Test-Path $tr) { foreach ($l in (Get-Content $tr -Encoding UTF8)) { if ($l -match '^cand at') { [void]$log.Add('trace ' + $l) } } ; Remove-Item $tr }
 Remove-Item (Join-Path $ud 'trace-on') -EA SilentlyContinue
 [KP]::Key(0x41, 0x11); [KP]::Key(0x2E, 0)
-if ($App -eq 'notepad') { Get-Process notepad -EA SilentlyContinue | Stop-Process -Force } else { Get-Process msedge -EA SilentlyContinue | Stop-Process -Force }
+if ($App -eq 'notepad') { Get-Process notepad -EA SilentlyContinue | Stop-Process -Force } elseif ($App -like 'edge*') { Get-Process msedge -EA SilentlyContinue | Stop-Process -Force } else { $f.Close() }
 [IO.File]::WriteAllLines("$inst\kx-pos-$App.txt", [string[]]$log.ToArray(), (New-Object Text.UTF8Encoding($false)))
