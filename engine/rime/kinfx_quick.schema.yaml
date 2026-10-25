@@ -183,7 +183,9 @@ assoc_translator:
   tag: kinfx_assoc
 
 # v0.5.4：唔再將拼音反查混入速成候選（Windows 速成冇；`j` 原本出 十|就|將…，
-# 空白會翻去拼音頁）。拼音反查照用 ` 開頭。要還原：custom 加 abc_segmentor/extra_tags: [reverse_lookup]。
+# 空白會翻去拼音頁）。0.1.8：拼音反查嗰條 recognizer pattern 都刪咗 —— ` 要即刻出返 `（打
+# code 用），一撳 ` 就彈反查選單就係「下下要揀」。要返反查：custom 加返 reverse_lookup 嗰條
+# pattern 同 abc_segmentor/extra_tags: [reverse_lookup]。
 
 reverse_lookup:
   dictionary: luna_pinyin
@@ -206,24 +208,10 @@ menu:
 
 punctuator:
   import_preset: default
-  # 「/」直出半形 /（寫 code、網址、日期唔使揀）；「、」改由「\」一粒鍵直出。
-  # 上游預設：/ 同 \ 都係選單，「、」排第一。要返舊樣：custom 刪走呢兩行。
+  # 0.1.8：標點全部由 engine/prelude/punctuation.yaml（三平台共用）單鍵直出，呢度唔再覆寫，
+  # 免得兩份表打架。' " 由半形改返 ‘’ “”（punctuation.yaml 的 pair），/ \ _ $ % # @ 仍然半形。
   # 寫 code：Ctrl+. 切 ASCII 標點（同 Windows 一樣），所有符號變半形直出；再撳返中文標點。
-  # v0.5.3：' " _ 照 Windows 11 微軟速成實測出半形（寫 code、英文縮寫唔使切）；
-  # ，。：「」等其他中文標點照舊全形。要返 ‘’“”——：custom 刪走呢三行。
-  half_shape:
-    "/": "/"
-    "\\": "、"
-    "'": "'"
-    "\"": "\""
-    "_": "_"
-    # v0.5.9：Shift+4/5/3/2 出半形 $ % # @ 本身（$ 原本係選單，Shift+4 再打 48 變 £8）。
-    "$": "$"
-    "%": "%"
-    "#": "#"
-    "@": "@"
-  # v0.5.9：數字後面嘅 . : , ' 留半形（20,000、3.14、12:30）；連撳兩下先出中文標點。
-  # Weasel 0.17.4 一向係咁；librime 1.16（macOS／Linux）預設只有 . :，20,000 變 20，000。
+  # 數字後面嘅 . : , ' 留半形（20,000、3.14、12:30）；連撳兩下先出中文標點。
   digit_separators: ".:,'"
 
 # 有候選窗：空白／右＝下一頁，左＝上一頁。無候選窗唔命中，空白仍係確認上屏
@@ -271,4 +259,3 @@ recognizer:
     # v0.5.10：英文詞中間嘅「-」後面再有字母（bait-and-switch），成個詞留拉丁。
     # 0.1.1：縮寫 don't／it's 成個詞留拉丁（english_mix.lua 嘅 APOS_STEM 先會留住 '）。
     url: "^(www[.]|https?:|ftp[.:]|mailto:|file:).*$|[a-z]+[.].+$|^[a-z]+-[A-Za-z0-9][-.A-Za-z0-9]*$|^[A-Za-z]+'[a-z]+$"
-    reverse_lookup: "`[a-z]*'?$"

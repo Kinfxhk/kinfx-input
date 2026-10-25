@@ -5,7 +5,9 @@
 #include <functional>
 #include <string>
 #include <vector>
+#include "chord.h"
 #include "core.h"
+#include "langbar.h"
 
 HINSTANCE g_hinst;
 static LONG g_refs = 0;
@@ -25,13 +27,16 @@ static bool TraceOn() {
 }
 static void Trace(const std::string &s) {
   if (!TraceOn()) return;
-  HANDLE h = CreateFileW((kx::UserDir() + L"\\log\\kx-trace.log").c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                         nullptr, OPEN_ALWAYS, 0, nullptr);
+  // One handle kept open: re-opening per line fails whenever a scanner holds the file, and a
+  // dropped line is worse than a leaked handle in a process that traces anyway.
+  static HANDLE h = INVALID_HANDLE_VALUE;
+  if (h == INVALID_HANDLE_VALUE)
+    h = CreateFileW((kx::UserDir() + L"\\log\\kx-trace.log").c_str(), FILE_APPEND_DATA,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, 0, nullptr);
   if (h == INVALID_HANDLE_VALUE) return;
   std::string line = s + "\r\n";
   DWORD n;
   WriteFile(h, line.data(), (DWORD)line.size(), &n, nullptr);
-  CloseHandle(h);
 }
 
 static std::string Hex(const std::string &s) {
@@ -51,6 +56,17 @@ static int Mask() {
   if (GetKeyState(VK_CONTROL) & 0x8000) m |= kControl;
   if (GetKeyState(VK_MENU) & 0x8000) m |= kAlt;
   return m;
+}
+
+// KINFX only sees these keys because core.cpp switches Windows' own bindings off (PreserveKey
+// registers fine but OnPreservedKey is never dispatched, so there is nothing to claim).
+static int ChordBit(WPARAM w) {
+  switch (w) {
+    case VK_SHIFT: case VK_LSHIFT: case VK_RSHIFT: return KxChord::kShift;
+    case VK_CONTROL: case VK_LCONTROL: case VK_RCONTROL: return KxChord::kCtrl;
+    case VK_MENU: case VK_LMENU: case VK_RMENU: return KxChord::kAlt;
+  }
+  return 0;  // Win and every other key cancel a chord
 }
 
 static int KeySym(WPARAM vk, LPARAM lp) {
@@ -87,6 +103,7 @@ class CandWin {
  public:
   void Show(const std::vector<std::wstring> &items, POINT at, int lineAbove, bool vertical) {
     if (!hwnd_) Create();
+    hintOn_ = false;  // a real candidate list takes the window back from the mode hint
     items_ = items;
     vertical_ = vertical;
     // The window lives in the host app's thread: GetDpiForWindow is 96 in DPI-unaware apps (Windows
@@ -121,7 +138,15 @@ class CandWin {
     SetWindowPos(hwnd_, HWND_TOPMOST, at.x, at.y, ww, wh, SWP_NOACTIVATE | SWP_SHOWWINDOW);
     InvalidateRect(hwnd_, nullptr, TRUE);
   }
-  void Hide() { if (hwnd_) ShowWindow(hwnd_, SW_HIDE); }
+  void Hide() { if (hwnd_ && !hintOn_) ShowWindow(hwnd_, SW_HIDE); }  // the hint owns the window for its 400 ms
+  // Mode hint ("中"/"英"): the candidate window for 400 ms, so the switch is visible without
+  // a second window class and without touching the keyboard. The modifier-up that follows the
+  // switch runs Update() -> Hide(), so the window is held until the timer fires.
+  void Hint(const std::wstring &s, POINT at) {
+    Show({s}, at, 20, true);
+    hintOn_ = true;
+    if (hwnd_) SetTimer(hwnd_, 1, 400, nullptr);
+  }
   void Destroy() { if (hwnd_) DestroyWindow(hwnd_); hwnd_ = nullptr; if (font_) DeleteObject(font_); font_ = nullptr; }
 
  private:
@@ -142,6 +167,13 @@ class CandWin {
   }
   static LRESULT CALLBACK Proc(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (m == WM_MOUSEACTIVATE) return MA_NOACTIVATE;
+    if (m == WM_TIMER) {
+      auto *self = (CandWin *)GetWindowLongPtrW(h, GWLP_USERDATA);
+      if (self) self->hintOn_ = false;
+      KillTimer(h, w);
+      ShowWindow(h, SW_HIDE);
+      return 0;  // end of the mode hint's 400 ms
+    }
     if (m == WM_PAINT) {
       auto *self = (CandWin *)GetWindowLongPtrW(h, GWLP_USERDATA);
       PAINTSTRUCT ps;
@@ -170,6 +202,7 @@ class CandWin {
   HFONT font_ = nullptr;
   std::vector<std::wstring> items_;
   bool vertical_ = true;
+  bool hintOn_ = false;  // the window is showing 中/英 and must survive the next Hide()
   int lineH_ = 24;
   int dpi_ = 0;
   static const int kFontPx = 24;  // px at 96 DPI (0.1.3: a fixed 18 px, never DPI-scaled)
@@ -222,10 +255,31 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     }
     bool ok = kx::Start();
     Trace(std::string("activate started=") + (ok ? "1" : "0"));
+    // Language bar button (中/英). The manager advises its ITfLangBarItemSink during AddItem, so the
+    // item must already be alive: Init() is called on our own reference.
+    ITfLangBarItemMgr *lb = nullptr;
+    HRESULT lbh = tm_->QueryInterface(IID_ITfLangBarItemMgr, (void **)&lb);
+    Trace("lb mgr hr=" + std::to_string((long)lbh));
+    if (SUCCEEDED(lbh)) {
+      lb_ = new LangBar(CLSID_KX, [this] { return sess_ && kx::AsciiMode(sess_); },
+                        [this] { ClickLangBar(); }, [](const std::string &s) { Trace(s); });
+      if (FAILED(lb_->Init(lb))) { lb_->Release(); lb_ = nullptr; Trace("langbar add failed"); }
+      lb->Release();
+    }
+    if (sess_) { lbAscii_ = !kx::AsciiMode(sess_); SyncMode(); }  // initial 中/英 for the system indicator
     return S_OK;
   }
   STDMETHODIMP Deactivate() override {
     Trace("deactivate");
+    if (lb_) {
+      ITfLangBarItemMgr *lb;
+      if (tm_ && SUCCEEDED(tm_->QueryInterface(IID_ITfLangBarItemMgr, (void **)&lb))) {
+        lb_->Uninit(lb);
+        lb->Release();
+      }
+      lb_->Release();
+      lb_ = nullptr;
+    }
     ITfKeystrokeMgr *km;
     if (tm_ && SUCCEEDED(tm_->QueryInterface(IID_ITfKeystrokeMgr, (void **)&km))) {
       km->UnadviseKeyEventSink(id_);
@@ -245,16 +299,25 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     else cand_.Hide();
     return S_OK;
   }
-  STDMETHODIMP OnTestKeyDown(ITfContext *, WPARAM w, LPARAM l, BOOL *eaten) override {
+  STDMETHODIMP OnTestKeyDown(ITfContext *c, WPARAM w, LPARAM l, BOOL *eaten) override {
     *eaten = Process(w, l, false);
+    Tail(c);
     // Paste: claim it here so OnKeyDown runs (sync edit session commits the held text), then OnKeyDown passes it to the app.
     if (paste_) *eaten = TRUE;
     return S_OK;
   }
-  STDMETHODIMP OnTestKeyUp(ITfContext *, WPARAM w, LPARAM l, BOOL *eaten) override { *eaten = Process(w, l, true); return S_OK; }
+  STDMETHODIMP OnTestKeyUp(ITfContext *c, WPARAM w, LPARAM l, BOOL *eaten) override {
+    *eaten = Process(w, l, true);
+    Tail(c);
+    return S_OK;
+  }
   STDMETHODIMP OnKeyDown(ITfContext *c, WPARAM w, LPARAM l, BOOL *eaten) override { *eaten = Handle(c, w, l, false); return S_OK; }
   STDMETHODIMP OnKeyUp(ITfContext *c, WPARAM w, LPARAM l, BOOL *eaten) override { *eaten = Handle(c, w, l, true); return S_OK; }
-  STDMETHODIMP OnPreservedKey(ITfContext *, REFGUID, BOOL *eaten) override { *eaten = FALSE; return S_OK; }
+  // No preserved keys are claimed (see the note at ChordBit); the interface still needs this.
+  STDMETHODIMP OnPreservedKey(ITfContext *, REFGUID, BOOL *eaten) override {
+    *eaten = FALSE;
+    return S_OK;
+  }
 
   STDMETHODIMP OnCompositionTerminated(TfEditCookie ec, ITfComposition *) override {
     // The app ended the composition (click elsewhere): Rime commits what the user was typing
@@ -287,8 +350,24 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     return sess_ != 0;
   }
 
+  // A switch the sink ate in its own test path gets no OnKeyDown/OnKeyUp (TSF stops after the
+  // eaten test), so the commit and the hint have to happen right there: an open preedit would
+  // otherwise be cancelled by the app and the typed text lost.
+  void Tail(ITfContext *c) {
+    if (!switch_) return;
+    switch_ = false;
+    Update(c);
+    if (hint_) { hint_ = false; ShowHint(); }
+  }
+
   bool Process(WPARAM w, LPARAM l, bool up) {
-    if (pending_ && pendW_ == w && pendUp_ == up) return pendEaten_;
+    // The remembered result belongs to the On* call that follows its OnTest* — and an eaten switch
+    // gets none (TSF stops after the test), so a pending Ctrl+Space must not answer the next one.
+    if (pending_) {
+      bool same = pendW_ == w && pendUp_ == up;
+      pending_ = false;
+      if (same) return pendEaten_;
+    }
     int sym = KeySym(w, l), mask = Mask();
     bool modKey = sym >= 0xffe1 && sym <= 0xffe2;
     // Shortcuts with Ctrl/Alt go to the app; Shift taps reach Rime (english_mix).
@@ -296,13 +375,102 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     // No preedit (e.g. association list after a pick) keeps the app paste, so Lua never shells out for the clipboard.
     bool paste = comp_ && (sym == 'v' || sym == 'V') && (mask & (kControl | kAlt)) == kControl;
     paste_ = paste && !up;
-    if (!sym || ((mask & (kControl | kAlt)) && !paste) || !Session()) return false;
-    if (up && !modKey) return false;
-    if (modKey) mask &= ~kShift;  // Rime gets the Shift key itself, not Shift as a modifier
-    bool eaten = kx_key(sess_, sym, mask | (up ? kRelease : 0)) != 0;
-    Trace("key sym=" + std::to_string(sym) + " m=" + std::to_string(mask) + (up ? " up" : "") + " eaten=" + (eaten ? "1" : "0"));
-    pending_ = true; pendW_ = w; pendUp_ = up; pendEaten_ = eaten;
+    // Bare Ctrl+Shift: the chord is complete on the last modifier release. Nothing synthetic is
+    // sent: Rime's key_binder is fed Control+space directly.
+    bool chord = chord_.Event(ChordBit(w), up);
+    if (chord) Trace("chord toggles ascii");
+    // Ctrl+Space is the Chinese/English switch: key_binder owns it, the shell only passes the key.
+    bool toggle = sym == 0x20 && (mask & kControl) && !(mask & kAlt);
+    bool eaten = false;
+    if (chord || (toggle && !up)) {
+      eaten = ToggleAscii();
+      switch_ = true;  // committed and hinted in Tail: this key never reaches OnKeyDown
+      pending_ = true; pendW_ = w; pendUp_ = up; pendEaten_ = eaten;
+    } else if (sym && (paste || !(mask & (kControl | kAlt))) && Session() && (!up || modKey)) {
+      int m = modKey ? mask & ~kShift : mask;  // Rime gets the Shift key itself, not Shift as a modifier
+      eaten = kx_key(sess_, sym, m | (up ? kRelease : 0)) != 0;
+      Trace("key sym=" + std::to_string(sym) + " m=" + std::to_string(m) + (up ? " up" : "") + " eaten=" + (eaten ? "1" : "0"));
+      pending_ = true; pendW_ = w; pendUp_ = up; pendEaten_ = eaten;
+    }
     return eaten;
+  }
+
+  // Rime owns ascii_mode. A live composition must be closed first: with one open,
+  // ascii_composer keeps the key inline, so the first letters typed after the switch
+  // were swallowed. Return commits the preedit (confirm; Space pages the Sucheng list),
+  // Escape closes the association list a commit leaves open.
+  bool ToggleAscii() {
+    if (!Session()) return false;
+    bool pre = comp_ != nullptr, list = cands_;
+    if (pre) kx_key(sess_, 0xff0d, 0);
+    if (pre || list) kx_key(sess_, 0xff1b, 0);
+    bool eaten = kx_key(sess_, 0x20, kControl) != 0;
+    hint_ = true;  // 中 / 英 for 400 ms: the user cannot see the mode anywhere else
+    Trace(std::string("toggle ascii preedit=") + (pre ? "1" : "0") + " list=" + (list ? "1" : "0") + " eaten=" + (eaten ? "1" : "0"));
+    return eaten;
+  }
+
+  // Language bar click: same switch as Ctrl+Space, plus the hint (there is no key to trigger it).
+  void ClickLangBar() {
+    if (!Session()) return;
+    ToggleAscii();
+    hint_ = false;
+    ShowHint();
+    SyncMode();
+  }
+
+  // 中/英 in the language bar follows ascii_mode whatever changed it (Ctrl+Space, Ctrl+Shift,
+  // Shift+Space inside Rime, or a click on the button). Only a real change notifies the manager.
+  void SyncMode() {
+    if (!sess_) return;
+    bool a = kx::AsciiMode(sess_);
+    if (a == lbAscii_) return;
+    lbAscii_ = a;
+    SetConversion(a);
+    if (lb_) lb_->Refresh();
+    Trace(std::string("langbar ") + (a ? "en" : "zh"));
+  }
+
+  // The system's own indicator (tray box, and the 中/英 badge next to the caret) reads the
+  // conversion-mode compartment; with it unset Windows keeps the profile icon (the K tile).
+  void SetConversion(bool ascii) {
+    if (!tm_) return;
+    ITfCompartmentMgr *cm;
+    ITfCompartment *c;
+    if (FAILED(tm_->QueryInterface(IID_ITfCompartmentMgr, (void **)&cm))) return;
+    if (SUCCEEDED(cm->GetCompartment(GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION, &c))) {
+      VARIANT v;
+      VariantInit(&v);
+      if (SUCCEEDED(c->GetValue(&v))) {
+        LONG f = v.vt == VT_I4 ? v.lVal : 0;
+        VariantClear(&v);
+        v.vt = VT_I4;
+        v.lVal = ascii ? (f & ~TF_CONVERSIONMODE_NATIVE) : (f | TF_CONVERSIONMODE_NATIVE);
+        Trace("conversion " + std::to_string((long)v.lVal) + " hr=" + std::to_string((long)c->SetValue(id_, &v)));
+        VariantClear(&v);
+      }
+      c->Release();
+    }
+    cm->Release();
+  }
+
+  // Screen point under the caret, for when TSF gave no text extent.
+  POINT CaretAt(int *lineH) {
+    POINT at = {-1, -1};
+    GetCaretPos(&at);
+    HWND fw = GetFocus();
+    if (fw) ClientToScreen(fw, &at);
+    at.y += 24;
+    *lineH = 24;
+    return at;
+  }
+
+  void ShowHint() {
+    std::wstring s = kx::AsciiMode(sess_) ? L"英" : L"中";
+    int h = 0;
+    POINT at = last_.x >= 0 ? last_ : CaretAt(&h);
+    cand_.Hint(s, at);
+    Trace("hint [" + kx::Utf8(s) + "]");
   }
 
   bool Handle(ITfContext *c, WPARAM w, LPARAM l, bool up) {
@@ -311,6 +479,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     // Update the document even for keys Rime let through: e.g. Return after a pick
     // closes the association list (Rime state changed) and must still reach the app.
     Update(c);
+    if (hint_) { hint_ = false; ShowHint(); }
     if (paste_ && !up) {
       // TSF already ate this Ctrl+V (OnTestKeyDown); the held text is written, composition closed,
       // so a re-sent V reaches the app as a plain paste (paste_ needs comp_, now null).
@@ -330,6 +499,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
 
   void Update(ITfContext *c) {
     if (!sess_) return;
+    SyncMode();
     char *raw = kx_take_commit(sess_);
     std::wstring commit = raw ? kx::Wide(raw) : L"";
     free(raw);
@@ -351,6 +521,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     }
     if (!commit.empty()) Trace("commit [" + kx::Utf8(commit) + "]");
     if (!cands.empty()) Trace("view page=" + (f.size() > 2 ? f[2] : "") + " n=" + std::to_string(cands.size()) + " pre=[" + f[0] + "] raw=[" + Hex(f.size() > 6 ? f[6] : "") + "]");
+    cands_ = !cands.empty();  // the association list a pick leaves open counts as candidates
     POINT at = {-1, -1};
     int lineH = 0;
     auto *es = new EditSession([&](TfEditCookie ec) { Write(ec, c, commit, pre, &at, &lineH); });
@@ -359,7 +530,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     es->Release();
     if (cands.empty()) { cand_.Hide(); return; }
     if (at.x < 0 && last_.x >= 0) { at = last_; lineH = lastH_; }  // TSF gave no extent: stay where the preedit was
-    if (at.x < 0) { GetCaretPos(&at); HWND fw = GetFocus(); if (fw) ClientToScreen(fw, &at); at.y += 24; lineH = 24; }
+    if (at.x < 0) at = CaretAt(&lineH);
     auto it = kx::Current().find("candidate_layout");
     cand_.Show(cands, at, lineH, it == kx::Current().end() || it->second != "horizontal");
   }
@@ -452,7 +623,13 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   POINT last_ = {-1, -1};
   int lastH_ = 0;
   CandWin cand_;
+  LangBar *lb_ = nullptr;
+  bool lbAscii_ = false;  // mode the language bar is showing
+  KxChord chord_;
+  bool hint_ = false;  // a mode switch is waiting to be shown after the next Update
+  bool switch_ = false;  // a mode switch happened in the test path: Tail() commits it
   bool pending_ = false, pendUp_ = false, pendEaten_ = false, paste_ = false;
+  bool cands_ = false;  // candidates (incl. the association list) were showing on the last update
   WPARAM pendW_ = 0;
 };
 
@@ -523,6 +700,7 @@ STDAPI DllRegisterServer() {
 }
 
 STDAPI DllUnregisterServer() {
+  kx::RestoreHotkeys();  // give Ctrl+Space / Ctrl+Shift / Alt+Shift back to Windows
   ITfInputProcessorProfileMgr *pm;
   if (SUCCEEDED(CoCreateInstance(CLSID_TF_InputProcessorProfiles, nullptr, CLSCTX_INPROC_SERVER, IID_ITfInputProcessorProfileMgr, (void **)&pm))) {
     pm->UnregisterProfile(CLSID_KX, LANG_KX, PROFILE_KX, 0);

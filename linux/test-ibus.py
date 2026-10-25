@@ -145,5 +145,40 @@ print("%s 'vd' client preedit: got %r want %r" % ("PASS" if got == want else "FA
 ok = ok and got == want
 ic3.focus_out()
 pump(0.3)
+
+# 0.1.8: punctuation is one key, one character — no candidate list (Windows Quick model)
+punct = [(',', '\uff0c'), ('.', '\u3002'), ('?', '\uff1f'), ('!', '\uff01'), (';', '\uff1b'), (':', '\uff1a'),
+         ('(', '\uff08'), (')', '\uff09'), ('[', '\u300c'), (']', '\u300d'), ('{', '\u300e'), ('}', '\u300f'),
+         ('<', '\u300a'), ('>', '\u300b'), ('/', '/'), ('-', '-'), ('$', '$'), ('%', '%'), ('*', '*'), ('~', '~')]
+for key, want in punct:
+    out.clear()
+    n_before = len(tables)
+    send(ord(key), SHIFT if key in '?<>{}' else 0)
+    pump(0.2)
+    got = "".join(out)
+    menu = len(tables) != n_before
+    print("%s punct %r: got %r want %r menu=%s" % ("PASS" if got == want and not menu else "FAIL", key, got, want, menu))
+    ok = ok and got == want and not menu
+
+# bare Ctrl+Shift -> toggle ascii_mode (Rime owns it through key_bindings.yaml)
+def bare_chord():
+    for kv, down in ((IBus.KEY_Control_L, True), (IBus.KEY_Shift_L, True),
+                     (IBus.KEY_Shift_L, False), (IBus.KEY_Control_L, False)):
+        ic.process_key_event(kv, 0, 0 if down else IBus.ModifierType.RELEASE_MASK)
+        pump(0.05)
+    pump(0.3)
+
+for label, ascii_mode in (("after chord 1", True), ("after chord 2", False)):
+    bare_chord()
+    out.clear()
+    handled = [send(ord(c)) for c in "vd1"]
+    pump(0.4)
+    got = "".join(out)
+    # ascii_mode: Rime lets the keys through (the app types them), so nothing is committed here
+    want = "" if ascii_mode else "\u597d"
+    ok_ascii = (not any(handled)) if ascii_mode else bool(any(handled))
+    print("%s %s: got %r want %r keys_passed=%s" % ("PASS" if got == want and ok_ascii else "FAIL", label, got, want, not any(handled)))
+    ok = ok and got == want and ok_ascii
+
 print("ALL PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)

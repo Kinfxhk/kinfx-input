@@ -24,7 +24,7 @@ rem rime.dll is delay-loaded: the host app's search path does not include our fo
 link /nologo /DLL /DEF:tip\tip.def /OUT:out\KINFXInput.dll obj\kx_shim.obj obj\core.obj obj\tip.obj obj\kx.res rime\rime.lib ^
   delayimp.lib /DELAYLOAD:rime.dll ole32.lib oleaut32.lib uuid.lib user32.lib gdi32.lib advapi32.lib shell32.lib || exit /b 1
 link /nologo /OUT:out\kx-selftest.exe obj\kx_shim.obj obj\core.obj obj\selftest.obj rime\rime.lib ^
-  delayimp.lib /DELAYLOAD:rime.dll user32.lib shell32.lib ole32.lib advapi32.lib || exit /b 1
+  delayimp.lib /DELAYLOAD:rime.dll user32.lib shell32.lib ole32.lib advapi32.lib gdi32.lib oleaut32.lib || exit /b 1
 %WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:winexe /platform:x64 /codepage:65001 /win32icon:kinfx.ico ^
   /r:System.Web.Extensions.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll /out:out\KINFXSettings.exe settings\Settings.cs || exit /b 1
 copy /y rime\rime.dll out\ >nul

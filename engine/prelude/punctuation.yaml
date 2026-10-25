@@ -1,105 +1,114 @@
-# Rime basic symbols
+# KINFX Input punctuation preset — shared by all three shells (windows build.cmd, mac/build.sh and
+# linux/build-deb.sh copy engine/prelude/*.yaml verbatim), so one edit here reaches every platform.
 # encoding: utf-8
+#
+# Hard rule: one key = one character. No entry may be a list of options — a list turns the key into
+# a candidate menu that has to be picked, which is exactly the "choose full-width or half-width every
+# time" the user complained about. Symbols that are not listed fall through to plain ASCII.
+# Rare symbols (【〔［, ￥€£, ×※❂) have no table here by design.
 
 full_shape:
   ' ' : { commit: '　' }
-  ',' : { commit: ， }
-  '.' : { commit: 。 }
-  '<' : [ 《, 〈, «, ‹ ]
-  '>' : [ 》, 〉, », › ]
-  '/' : [ ／, ÷ ]
-  '?' : { commit: ？ }
-  ';' : { commit: ； }
-  ':' : { commit: ： }
-  '''' : { pair: [ '‘', '’' ] }
+  ',' : { commit: '，' }
+  '.' : { commit: '。' }
+  '?' : { commit: '？' }
+  '!' : { commit: '！' }
+  ';' : { commit: '；' }
+  ':' : { commit: '：' }
+  '(' : { commit: '（' }
+  ')' : { commit: '）' }
+  '[' : { commit: '「' }
+  ']' : { commit: '」' }
+  '{' : { commit: '『' }
+  '}' : { commit: '』' }
+  '<' : { commit: '《' }
+  '>' : { commit: '》' }
+  "\\" : { commit: '、' }
+  "'" : { pair: [ '‘', '’' ] }
   '"' : { pair: [ '“', '”' ] }
-  '\' : [ 、, ＼ ]
-  '|' : [ ·, ｜, '§', '¦' ]
-  '`' : ｀
-  '~' : ～
-  '!' : { commit: ！ }
-  '@' : [ ＠, ☯ ]
-  '#' : [ ＃, ⌘ ]
-  '%' : [ ％, '°', '℃' ]
-  '$' : [ ￥, '$', '€', '£', '¥', '¢', '¤' ]
-  '^' : { commit: …… }
-  '&' : ＆
-  '*' : [ ＊, ·, ・, ×, ※, ❂ ]
-  '(' : （
-  ')' : ）
-  '-' : －
-  '_' : ——
-  '+' : ＋
-  '=' : ＝
-  '[' : [ 「, 【, 〔, ［ ]
-  ']' : [ 」, 】, 〕, ］ ]
-  '{' : [ 『, 〖, ｛ ]
-  '}' : [ 』, 〗, ｝ ]
+  '/' : { commit: '／' }
+  '-' : { commit: '－' }
+  '_' : { commit: '＿' }
+  '+' : { commit: '＋' }
+  '=' : { commit: '＝' }
+  '~' : { commit: '～' }
+  '$' : { commit: '＄' }
+  '%' : { commit: '％' }
+  '@' : { commit: '＠' }
+  '#' : { commit: '＃' }
+  '^' : { commit: '＾' }
+  '&' : { commit: '＆' }
+  '*' : { commit: '＊' }
+  '|' : { commit: '｜' }
+  '`' : { commit: '｀' }
 
+# Chinese punctuation; ASCII kept for everything typed in code and URLs.
 half_shape:
-  ',' : { commit: ， }
-  '.' : { commit: 。 }
-  '<' : [ 《, 〈, «, ‹ ]
-  '>' : [ 》, 〉, », › ]
-  '/' : [ 、, '/', ／, ÷ ]
-  '?' : { commit: ？ }
-  ';' : { commit: ； }
-  ':' : { commit: ： }
-  '''' : { pair: [ '‘', '’' ] }
+  ',' : { commit: '，' }
+  '.' : { commit: '。' }
+  '?' : { commit: '？' }
+  '!' : { commit: '！' }
+  ';' : { commit: '；' }
+  ':' : { commit: '：' }
+  '(' : { commit: '（' }
+  ')' : { commit: '）' }
+  '[' : { commit: '「' }
+  ']' : { commit: '」' }
+  '{' : { commit: '『' }
+  '}' : { commit: '』' }
+  '<' : { commit: '《' }
+  '>' : { commit: '》' }
+  "\\" : { commit: '、' }
+  "'" : { pair: [ '‘', '’' ] }
   '"' : { pair: [ '“', '”' ] }
-  '\' : [ 、, '\', ＼ ]
-  '|' : [ ·, '|', ｜, '§', '¦' ]
-  '`' : '`'
-  '~' : [ '~', ～ ]
-  '!' : { commit: ！ }
-  '@' : '@'
-  '#' : '#'
-  '%' : [ '%', ％, '°', '℃' ]
-  '$' : [ ￥, '$', '€', '£', '¥', '¢', '¤' ]
-  '^' : { commit: …… }
-  '&' : '&'
-  '*' : [ '*', ＊, ·, ・, ×, ※, ❂ ]
-  '(' : （
-  ')' : ）
-  '-' : '-'
-  '_' : ——
-  '+' : '+'
-  '=' : '='
-  '[' : [ 「, 【, 〔, ［ ]
-  ']' : [ 」, 】, 〕,  ］ ]
-  '{' : [ 『, 〖, ｛ ]
-  '}' : [ 』, 〗, ｝ ]
+  '/' : { commit: '/' }
+  '-' : { commit: '-' }
+  '_' : { commit: '_' }
+  '+' : { commit: '+' }
+  '=' : { commit: '=' }
+  '~' : { commit: '~' }
+  '$' : { commit: '$' }
+  '%' : { commit: '%' }
+  '@' : { commit: '@' }
+  '#' : { commit: '#' }
+  '^' : { commit: '^' }
+  '&' : { commit: '&' }
+  '*' : { commit: '*' }
+  '|' : { commit: '|' }
+  '`' : { commit: '`' }
 
+# ascii_punct option (Control+period): every key straight ASCII, no table lookup.
 ascii_style:
+  ' ' : { commit: ' ' }
   ',' : { commit: ',' }
   '.' : { commit: '.' }
-  '<' : '<'
-  '>' : '>'
-  '/' : '/'
   '?' : { commit: '?' }
+  '!' : { commit: '!' }
   ';' : { commit: ';' }
   ':' : { commit: ':' }
-  "'" : "'"
-  '"' : '"'
-  '\' : '\'
-  '|' : '|'
-  '`' : '`'
-  '~' : '~'
-  '!' : { commit: '!' }
-  '@' : '@'
-  '#' : '#'
-  '%' : '%'
-  '$' : '$'
-  '^' : '^'
-  '&' : '&'
-  '*' : '*'
-  '(' : '('
-  ')' : ')'
-  '-' : '-'
-  '_' : '_'
-  '+' : '+'
-  '=' : '='
-  '[' : '['
-  ']' : ']'
-  '{' : '{'
-  '}' : '}'
+  '(' : { commit: '(' }
+  ')' : { commit: ')' }
+  '[' : { commit: '[' }
+  ']' : { commit: ']' }
+  '{' : { commit: '{' }
+  '}' : { commit: '}' }
+  '<' : { commit: '<' }
+  '>' : { commit: '>' }
+  "\\" : { commit: '\\' }
+  "'" : { commit: "'" }
+  '"' : { commit: '"' }
+  '/' : { commit: '/' }
+  '-' : { commit: '-' }
+  '_' : { commit: '_' }
+  '+' : { commit: '+' }
+  '=' : { commit: '=' }
+  '~' : { commit: '~' }
+  '$' : { commit: '$' }
+  '%' : { commit: '%' }
+  '@' : { commit: '@' }
+  '#' : { commit: '#' }
+  '^' : { commit: '^' }
+  '&' : { commit: '&' }
+  '*' : { commit: '*' }
+  '|' : { commit: '|' }
+  '`' : { commit: '`' }

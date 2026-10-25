@@ -68,6 +68,14 @@ optimized_mode_switch:
     - { when: always, accept: Control+slash, toggle: simplification }
     - { when: always, accept: Control+backslash, toggle: extended_charset }
 
+# KINFX Input: Ctrl+Space switches Chinese/English. The shells send the same chord for the
+# bare Ctrl+Shift / Alt+Shift chords, so rime stays the only owner of ascii_mode.
+# 0.1.8: Shift+Space toggles 半角/全角 (Windows habit); the punctuation table needs no menu.
+kinfx_mode_switch:
+  __append:
+    - { when: always, accept: Control+space, toggle: ascii_mode }
+    - { when: always, accept: Shift+space, toggle: full_shape }
+
 # selector/bindings:
 
 rotate_candidate_with_tab:
