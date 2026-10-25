@@ -67,7 +67,7 @@ ok = text == "好iPhone " and r is False and list(passed.values())[0] == want_n
 
 # 0.1.1 English fixes through real IBus key events (Shift+/ arrives as "?" with the shift mask)
 SHIFT = IBus.ModifierType.SHIFT_MASK
-for keys, want in [("hello.vd1", "hello\u3002\u597d"), ("hello\r", "hello"), ("thanks?", "thanks\uff1f"),
+for keys, want in [("hello.vd1", "hello.\u597d"), ("hello\r", "hello"), ("thanks?", "thanks?"),
                    ("don't ", "don't "), ("gg ", "gg "), ("fogge 1", "\u708a\u572d\u6c34")]:
     out.clear()
     for c in keys:
@@ -146,10 +146,11 @@ ok = ok and got == want
 ic3.focus_out()
 pump(0.3)
 
-# 0.1.8: punctuation is one key, one character — no candidate list (Windows Quick model)
-punct = [(',', '\uff0c'), ('.', '\u3002'), ('?', '\uff1f'), ('!', '\uff01'), (';', '\uff1b'), (':', '\uff1a'),
-         ('(', '\uff08'), (')', '\uff09'), ('[', '\u300c'), (']', '\u300d'), ('{', '\u300e'), ('}', '\u300f'),
-         ('<', '\u300a'), ('>', '\u300b'), ('/', '/'), ('-', '-'), ('$', '$'), ('%', '%'), ('*', '*'), ('~', '~')]
+# 0.1.8: punctuation is one key, one character, no candidate list. 半形 (default) = ASCII,
+# 全形 (Shift+Space) = Chinese punctuation, same as Windows Quick.
+punct = [(',', ','), ('.', '.'), ('?', '?'), ('!', '!'), (';', ';'), (':', ':'),
+         ('(', '('), (')', ')'), ('[', '['), (']', ']'), ('{', '{'), ('}', '}'),
+         ('<', '<'), ('>', '>'), ('/', '/'), ('\\', '\\'), ("'", "'"), ('"', '"'), ('-', '-'), ('$', '$'), ('%', '%'), ('*', '*'), ('~', '~')]
 for key, want in punct:
     out.clear()
     n_before = len(tables)
@@ -159,6 +160,21 @@ for key, want in punct:
     menu = len(tables) != n_before
     print("%s punct %r: got %r want %r menu=%s" % ("PASS" if got == want and not menu else "FAIL", key, got, want, menu))
     ok = ok and got == want and not menu
+
+# Shift+Space = 全形: the same keys now give Chinese punctuation, still no menu
+send(0x20, IBus.ModifierType.SHIFT_MASK)
+pump(0.3)
+for key, want in [(',', '，'), ('[', '「'), ('/', '／')]:
+    out.clear()
+    n_before = len(tables)
+    send(ord(key), SHIFT if key in '<>{}' else 0)
+    pump(0.2)
+    got = "".join(out)
+    menu = len(tables) != n_before
+    print("%s full_shape %r: got %r want %r menu=%s" % ("PASS" if got == want and not menu else "FAIL", key, got, want, menu))
+    ok = ok and got == want and not menu
+send(0x20, IBus.ModifierType.SHIFT_MASK)
+pump(0.3)
 
 # bare Ctrl+Shift -> toggle ascii_mode (Rime owns it through key_bindings.yaml)
 def bare_chord():

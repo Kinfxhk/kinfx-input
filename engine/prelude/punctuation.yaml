@@ -42,25 +42,27 @@ full_shape:
   '|' : { commit: '｜' }
   '`' : { commit: '｀' }
 
-# Chinese punctuation; ASCII kept for everything typed in code and URLs.
+# 半形（預設）：同 Windows 速成一樣，標點直接出 ASCII，唔使揀、唔使切。
+# 想要中文標點就 Shift+Space 切全形（上面 full_shape）。
 half_shape:
-  ',' : { commit: '，' }
-  '.' : { commit: '。' }
-  '?' : { commit: '？' }
-  '!' : { commit: '！' }
-  ';' : { commit: '；' }
-  ':' : { commit: '：' }
-  '(' : { commit: '（' }
-  ')' : { commit: '）' }
-  '[' : { commit: '「' }
-  ']' : { commit: '」' }
-  '{' : { commit: '『' }
-  '}' : { commit: '』' }
-  '<' : { commit: '《' }
-  '>' : { commit: '》' }
-  "\\" : { commit: '、' }
-  "'" : { pair: [ '‘', '’' ] }
-  '"' : { pair: [ '“', '”' ] }
+  ' ' : { commit: ' ' }
+  ',' : { commit: ',' }
+  '.' : { commit: '.' }
+  '?' : { commit: '?' }
+  '!' : { commit: '!' }
+  ';' : { commit: ';' }
+  ':' : { commit: ':' }
+  '(' : { commit: '(' }
+  ')' : { commit: ')' }
+  '[' : { commit: '[' }
+  ']' : { commit: ']' }
+  '{' : { commit: '{' }
+  '}' : { commit: '}' }
+  '<' : { commit: '<' }
+  '>' : { commit: '>' }
+  "\\" : { commit: "\\" }
+  "'" : { commit: "'" }
+  '"' : { commit: '"' }
   '/' : { commit: '/' }
   '-' : { commit: '-' }
   '_' : { commit: '_' }
@@ -94,7 +96,7 @@ ascii_style:
   '}' : { commit: '}' }
   '<' : { commit: '<' }
   '>' : { commit: '>' }
-  "\\" : { commit: '\\' }
+  "\\" : { commit: "\\" }
   "'" : { commit: "'" }
   '"' : { commit: '"' }
   '/' : { commit: '/' }
