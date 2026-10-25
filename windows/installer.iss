@@ -1,5 +1,5 @@
 ; KINFX Input Windows installer (Inno Setup 6). Built by build.cmd from windows\build\stage.
-#define Ver "0.1.8"
+#define Ver "0.1.9"
 [Setup]
 AppId={{D71D8CE6-CDFB-4F06-B416-5C60A93B7FE0}
 AppName=KINFX Input
@@ -40,14 +40,14 @@ Source: "out\enable.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "out\data\*"; DestDir: "{app}\data"; Flags: ignoreversion recursesubdirs
 
 [Icons]
-Name: "{group}\KINFX Input 設定"; Filename: "{app}\KINFXSettings.exe"
+Name: "{group}\KINFX Input "; Filename: "{app}\KINFXSettings.exe"
 
 [Run]
 Filename: "{sys}\regsvr32.exe"; Parameters: "/s ""{app}\KINFXInput.dll"""; Flags: runhidden waituntilterminated
-; Per-user steps run as the user who started the installer: first build + add to 繁中 input methods.
+; Per-user steps run as the user who started the installer: first build + add to  input methods.
 Filename: "{app}\KINFXSettings.exe"; Parameters: "--deploy"; Flags: runasoriginaluser runhidden waituntilterminated
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\enable.ps1"""; Flags: runasoriginaluser runhidden waituntilterminated
-Filename: "{app}\KINFXSettings.exe"; Description: "開啟 KINFX Input 設定"; Flags: postinstall nowait skipifsilent runasoriginaluser
+Filename: "{app}\KINFXSettings.exe"; Description: " KINFX Input "; Flags: postinstall nowait skipifsilent runasoriginaluser
 
 [UninstallRun]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\enable.ps1"" -Remove"; Flags: runhidden waituntilterminated; RunOnceId: "kxdisable"

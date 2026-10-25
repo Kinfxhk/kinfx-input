@@ -10,8 +10,8 @@ BEGIN
     BEGIN
       VALUE "FileDescription", "KINFX Input"
       VALUE "ProductName", "KINFX Input"
-      VALUE "FileVersion", "0.1.8"
-      VALUE "ProductVersion", "0.1.8"
+      VALUE "FileVersion", "0.1.9"
+      VALUE "ProductVersion", "0.1.9"
     END
   END
   BLOCK "VarFileInfo"

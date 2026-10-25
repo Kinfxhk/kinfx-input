@@ -45,13 +45,13 @@ check("iPhone Space", type_keys(codes("iPhone "))[0], "iPhone ")
 # 0.1.1 English fixes (engine/rime/lua/english_mix.lua), same vectors as mac/Tests/SelfTest
 RET = 0xFF0D
 for name, keys, want in [
-    ("word . chinese", codes("hello.vd1"), "hello\u3002\u597d"),
+    ("word . chinese", codes("hello.vd1"), "hello.\u597d"),
     ("domain stays latin", codes("openai.com "), "openai.com "),
     ("file name stays latin", codes("llama.cpp "), "llama.cpp "),
     ("5-letter prefix + space stays chinese", codes("fogge 1"), "\u708a\u572d\u6c34"),
     ("word Enter", codes("hello") + [RET], "hello"),
     ("chinese Enter unchanged", codes("vd") + [RET], "\u597d"),
-    ("word ?", codes("thanks?"), "thanks\uff1f"),
+    ("word ?", codes("thanks?"), "thanks?"),
     ("contraction", codes("don't "), "don't "),
     ("gg space", codes("gg "), "gg "),
     ("gg1 still chinese", codes("gg1"), "\u572d"),

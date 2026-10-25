@@ -23,6 +23,9 @@ local pm = require("phrase_mix").helpers
 local kRejected = 0 -- the app gets the key (librime ProcessResult)
 local kAccepted = 1
 local kNoop = 2
+
+-- 半形（預設）出 ASCII 標點；只有全形（Shift+Space）才出中文標點，同 Windows 速成一致。
+local function full_shape(env) return env.engine.context:get_option("full_shape") end
 local META_MASK = 0x10000000 -- kMetaMask (1 << 28)
 
 local function config_int(config, path, default)
@@ -312,6 +315,8 @@ local function commit_word(env, ctx, text)
   S.guard = true
   ctx:clear()
   S.guard = false
+  -- The held-dot path stores a 。 while it waits; 半形 (default) must commit ASCII.
+  if text and not full_shape(env) then text = (text:gsub("。", ".")) end
   env.engine:commit_text(text)
 end
 
@@ -978,7 +983,8 @@ function process(key, env)
     -- clients dropped; committing it here works the same everywhere.
     local cseg = ctx.composition and not ctx.composition:empty() and ctx.composition:back()
     local in_url = cseg and (cseg:has_tag("url") or cseg:has_tag("email") or cseg:has_tag("uppercase"))
-    local url_start = S.tracking and kc < 0x80 and URL_START[S.raw .. string.char(kc)]
+    local url_start = S.tracking and kc < 0x80 and URL_START[S.raw .. string.char(kc)]
+
     -- Space on a URL / email: commit it plus a space, like an English word
     -- (www.x.com + Space typed www.x.com with no space).
     if repr == "space" and not S.tracking and env.smart and cseg
@@ -1019,7 +1025,7 @@ function process(key, env)
        or ((kc == 0x28 or shift_nine) and not env.paren_pick) then
       close_assoc(ctx)
       if shift_nine and kc ~= 0x28 then
-        env.engine:commit_text("（")
+        env.engine:commit_text(full_shape(env) and "（" or "(")
         return kAccepted
       end
       return kNoop
