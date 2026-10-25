@@ -4,3 +4,6 @@ windows/build/
 linux/build/
 dist/
 windows/out/
+windows/vm/shots/
+windows/kx-*.txt
+*.log

@@ -16,6 +16,16 @@ MASK = (IBus.ModifierType.SHIFT_MASK | IBus.ModifierType.LOCK_MASK | IBus.Modifi
 
 ENGINE = kxcore.Engine()
 
+# Bare Ctrl+Shift / Alt+Shift are chords, like the Windows shell: Windows/IBus would otherwise
+# switch the input method before Rime sees the keys. Track the modifiers here and hand the
+# chord to Rime as Control+space, which owns ascii_mode (key_bindings.yaml).
+MODS = {
+    IBus.KEY_Control_L: 1, IBus.KEY_Control_R: 1,
+    IBus.KEY_Shift_L: 2, IBus.KEY_Shift_R: 2,
+    IBus.KEY_Alt_L: 4, IBus.KEY_Alt_R: 4,
+}
+CHORDS = (1 | 2, 4 | 2)  # Ctrl+Shift, Alt+Shift
+
 
 class KxEngine(IBus.Engine):
     __gtype_name__ = "KxEngine"
@@ -24,6 +34,34 @@ class KxEngine(IBus.Engine):
         super().__init__(**kw)
         self.sess = 0
         self.table = IBus.LookupTable.new(9, 0, False, False)
+        self.mods = 0      # modifiers currently down
+        self.peak = 0      # every modifier seen since the chord started
+        self.dirty = False  # a real key broke the chord
+
+    def _chord(self, keyval, state):
+        """Returns True when the key completed a bare chord (and the toggle was sent)."""
+        bit = MODS.get(keyval)
+        if bit is None:
+            self.dirty = True  # any other key means it was a shortcut
+            return False
+        if not state & IBus.ModifierType.RELEASE_MASK:
+            if not self.mods:
+                self.peak = 0
+                self.dirty = False
+            self.mods |= bit
+            self.peak |= self.mods
+            return False
+        self.mods &= ~bit
+        if self.mods:
+            return False
+        hit = not self.dirty and self.peak in CHORDS
+        self.peak = 0
+        self.dirty = False
+        if not hit:
+            return False
+        ENGINE.key(self.sess, IBus.KEY_space, int(IBus.ModifierType.CONTROL_MASK))
+        self._update()
+        return True
 
     def _session(self):
         if not ENGINE.alive(self.sess):
@@ -33,6 +71,8 @@ class KxEngine(IBus.Engine):
     def do_process_key_event(self, keyval, keycode, state):
         if not self._session():
             return False
+        if self._chord(keyval, state):
+            return True
         handled = ENGINE.key(self.sess, keyval, int(state) & int(MASK))
         self._update()
         return handled

@@ -25,6 +25,12 @@ bool Started();
 // Re-read settings.json if its mtime changed; rewrite the patch and redeploy.
 bool ReloadIfChanged();
 const Settings &Current();
+bool AsciiMode(uintptr_t sess);  // Rime's ascii_mode option (the 中/英 hint reads it)
+
+// Turns off Windows' own Ctrl+Space / Ctrl+Shift / Alt+Shift bindings (backed up once to
+// hotkeys-backup.json) so the key sink receives them; RestoreHotkeys undoes it on uninstall.
+void TakeOverHotkeys();
+bool RestoreHotkeys();
 
 }  // namespace kx
 
