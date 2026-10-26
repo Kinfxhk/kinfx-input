@@ -2,6 +2,8 @@
 
 獨立輸入法。引擎用現有 KINFX 速成（librime + schema），殼係自己的。公開 repo `kinfx-ime` 停喺 v0.5.10，呢度唔好再推返去。
 
+**Android 版封閉測試招募中（名額有限，先到先得）** — Google Play 要求新開發者帳戶先完成 12 人 × 連續 14 天的封閉測試，所以想找真實用家幫手試。想試就[用這個表單留下 Gmail](https://docs.google.com/forms/d/e/1FAIpQLSdvbBoJQNDaiJCzGrdQ1OkEcVN0wNLcTaekRPusxvGasP6kZw/viewform)，我會逐個加入測試名單；Play 審核通過後（通常一星期內）會收到測試連結。安裝後照平時打字，有問題回報就好，不需要寫評論。
+
 免費直裝包：macOS／Linux／Windows 都用 [v0.1.5](https://github.com/Kinfxhk/kinfx-input/releases/tag/v0.1.5)。未簽名、未公證。設定只用視窗，唔使改碼。
 
 ## 安裝包
