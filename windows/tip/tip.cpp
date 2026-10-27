@@ -104,6 +104,7 @@ class CandWin {
   void Show(const std::vector<std::wstring> &items, POINT at, int lineAbove, bool vertical) {
     if (!hwnd_) Create();
     hintOn_ = false;  // a real candidate list takes the window back from the mode hint
+    KillTimer(hwnd_, 1);  // ... and the hint's 400 ms timer must not hide the list later
     items_ = items;
     vertical_ = vertical;
     // The window lives in the host app's thread: GetDpiForWindow is 96 in DPI-unaware apps (Windows
@@ -136,9 +137,20 @@ class CandWin {
       if (at.x < wa.left) at.x = wa.left;
     }
     SetWindowPos(hwnd_, HWND_TOPMOST, at.x, at.y, ww, wh, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    // Some hosts (WebView2 panels such as Raycast's search, browser popups) hide their window
+    // without a TSF focus change, so OnSetFocus(FALSE) never arrives and this topmost list stays
+    // on screen over other apps (reported 2026-10-27). While the list is visible, watch the
+    // host's foreground root and hide when it is no longer ours.
+    HWND fg = GetForegroundWindow();
+    fgRoot_ = fg ? GetAncestor(fg, GA_ROOT) : nullptr;
+    if (fgRoot_) SetTimer(hwnd_, 2, 250, nullptr);
     InvalidateRect(hwnd_, nullptr, TRUE);
   }
-  void Hide() { if (hwnd_ && !hintOn_) ShowWindow(hwnd_, SW_HIDE); }  // the hint owns the window for its 400 ms
+  void Hide() {
+    if (!hwnd_ || hintOn_) return;  // the hint owns the window for its 400 ms
+    KillTimer(hwnd_, 2);
+    ShowWindow(hwnd_, SW_HIDE);
+  }
   // Mode hint ("中"/"英"): the candidate window for 400 ms, so the switch is visible without
   // a second window class and without touching the keyboard. The modifier-up that follows the
   // switch runs Update() -> Hide(), so the window is held until the timer fires.
@@ -147,7 +159,11 @@ class CandWin {
     hintOn_ = true;
     if (hwnd_) SetTimer(hwnd_, 1, 400, nullptr);
   }
-  void Destroy() { if (hwnd_) DestroyWindow(hwnd_); hwnd_ = nullptr; if (font_) DeleteObject(font_); font_ = nullptr; }
+  void Destroy() {
+    if (hwnd_) { KillTimer(hwnd_, 1); KillTimer(hwnd_, 2); DestroyWindow(hwnd_); }
+    hwnd_ = nullptr;
+    if (font_) DeleteObject(font_); font_ = nullptr;
+  }
 
  private:
   void Create() {
@@ -169,10 +185,27 @@ class CandWin {
     if (m == WM_MOUSEACTIVATE) return MA_NOACTIVATE;
     if (m == WM_TIMER) {
       auto *self = (CandWin *)GetWindowLongPtrW(h, GWLP_USERDATA);
-      if (self) self->hintOn_ = false;
-      KillTimer(h, w);
-      ShowWindow(h, SW_HIDE);
-      return 0;  // end of the mode hint's 400 ms
+      if (w == 1) {
+        if (self) self->hintOn_ = false;
+        KillTimer(h, 1);
+        KillTimer(h, 2);
+        ShowWindow(h, SW_HIDE);
+        return 0;  // end of the mode hint's 400 ms
+      }
+      if (w == 2 && self) {
+        HWND fg = GetForegroundWindow();
+        // A hidden host can still be the foreground window (Windows only moves it when another
+        // window activates), so the window's own visibility counts as lost focus too.
+        bool lost = !fg || GetAncestor(fg, GA_ROOT) != self->fgRoot_ || !IsWindowVisible(self->fgRoot_) || IsIconic(self->fgRoot_);
+        if (lost) {
+          KillTimer(h, 2);
+          self->hintOn_ = false;
+          ShowWindow(h, SW_HIDE);
+          Trace("cand hidden: app lost foreground");
+        }
+        return 0;  // foreground watchdog
+      }
+      return 0;
     }
     if (m == WM_PAINT) {
       auto *self = (CandWin *)GetWindowLongPtrW(h, GWLP_USERDATA);
@@ -203,6 +236,7 @@ class CandWin {
   std::vector<std::wstring> items_;
   bool vertical_ = true;
   bool hintOn_ = false;  // the window is showing 中/英 and must survive the next Hide()
+  HWND fgRoot_ = nullptr;  // foreground root the list was shown for (timer 2 hides when it changes)
   int lineH_ = 24;
   int dpi_ = 0;
   static const int kFontPx = 24;  // px at 96 DPI (0.1.3: a fixed 18 px, never DPI-scaled)
