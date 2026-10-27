@@ -2,7 +2,7 @@
 
 獨立輸入法。引擎用現有 KINFX 速成（librime + schema），殼係自己的。公開 repo `kinfx-ime` 停喺 v0.5.10，呢度唔好再推返去。
 
-免費直裝包：macOS／Linux／Windows 都用 [v0.1.5](https://github.com/Kinfxhk/kinfx-input/releases/tag/v0.1.5)。未簽名、未公證。設定只用視窗，唔使改碼。
+免費直裝包：Windows 用 [v0.1.10](https://github.com/Kinfxhk/kinfx-input/releases/tag/v0.1.10)（修正選字框殘留喺畫面）；macOS／Linux 仍然係 [v0.1.5](https://github.com/Kinfxhk/kinfx-input/releases/tag/v0.1.5)。未簽名、未公證。設定只用視窗，唔使改碼。
 
 ## 安裝包
 
@@ -14,7 +14,7 @@
 
 ### Windows
 
-下載 [`KINFX-Input-0.1.5-Windows-x64.exe`](https://github.com/Kinfxhk/kinfx-input/releases/download/v0.1.5/KINFX-Input-0.1.5-Windows-x64.exe)，右鍵以系統管理員執行。裝完在工作列輸入法揀 KINFX Input（速）。唔靠小狼毫。
+下載 [`KINFX-Input-0.1.10-Windows-x64.exe`](https://github.com/Kinfxhk/kinfx-input/releases/download/v0.1.10/KINFX-Input-0.1.10-Windows-x64.exe)，右鍵以系統管理員執行。裝完在工作列輸入法揀 KINFX Input（速）。唔靠小狼毫。
 
 ### Linux（amd64，要 IBus）
 
