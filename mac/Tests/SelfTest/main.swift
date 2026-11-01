@@ -95,13 +95,15 @@ func typeKeys(_ keys: [Int32]) -> String {
   return out
 }
 let ret: Int32 = 0xff0d
-check("word . chinese", type("hello.vd1").commit, "hello\u{3002}\u{597D}")
+// 0.1.9 made half-width punctuation the default; linux/selftest.py already expects
+// "hello." / "thanks?", so these two mac expectations were the stale side of that change.
+check("word . chinese", type("hello.vd1").commit, "hello.\u{597D}")
 check("domain stays latin", type("openai.com ").commit, "openai.com ")
 check("file name stays latin", type("llama.cpp ").commit, "llama.cpp ")
 check("5-letter prefix + space stays chinese", type("fogge 1").commit, "\u{708A}\u{572D}\u{6C34}")
 check("word Enter", typeKeys([0x68, 0x65, 0x6c, 0x6c, 0x6f, ret]), "hello")
 check("chinese Enter unchanged", typeKeys([0x76, 0x64, ret]), "\u{597D}")
-check("word ?", type("thanks?").commit, "thanks\u{FF1F}")
+check("word ?", type("thanks?").commit, "thanks?")
 check("contraction", type("don't ").commit, "don't ")
 check("gg space", type("gg ").commit, "gg ")
 check("gg1 still chinese", type("gg1").commit, "\u{572D}")
