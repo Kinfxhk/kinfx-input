@@ -72,6 +72,10 @@ app)
   cp -R "$B/data" "$APP/Contents/Resources/data"
   cp "$ROOT/app-info.json" "$APP/Contents/Resources/app-info.json"
   cp Resources/Info.plist "$APP/Contents/Info.plist"
+  # app-info.json is the one place the version is written; the plist used to be bumped by hand
+  # and had drifted to 0.1.5 while app-info.json said 0.1.10.
+  APP_VER=$(python3 -c "import json;print(json.load(open('$ROOT/app-info.json'))['version'])")
+  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_VER" "$APP/Contents/Info.plist"
   swift tools/make-icon.swift "$APP/Contents/Resources/KINFX.tiff"
   ENT=Resources/KINFXInput-$FLAVOR.entitlements
   [[ -f $ENT ]] || { echo "unknown flavor $FLAVOR" >&2; exit 2; }
@@ -89,7 +93,7 @@ pkg)
   # Unsigned unless SIGN_ID (Developer ID Application) and PKG_SIGN_ID (Developer ID Installer) are set;
   # notarise with NOTARY_PROFILE (xcrun notarytool store-credentials name).
   bash "$PWD/build.sh" app direct
-  VER=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
+  VER=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$B/KINFX Input.app/Contents/Info.plist")
   P=$B/pkgroot; rm -rf "$P" && mkdir -p "$P" && cp -R "$B/KINFX Input.app" "$P/"
   OUT=$B/KINFX-Input-$VER-macOS.pkg
   # Component installs relative to the chosen domain; distribution.xml allows only the
