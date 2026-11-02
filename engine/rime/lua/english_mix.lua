@@ -1057,7 +1057,13 @@ function process(key, env)
     end
     if tap and S.tracking and S.raw ~= "" then
       -- the raw letters (or a listed name: openai -> OpenAI) replace the held top-outs
-      commit_word(env, ctx, shift_text(env, S.raw))
+      local text = shift_text(env, S.raw)
+      -- an unlisted run must not be shouted: abcd stays abcd. Only a real name
+      -- entry (or a mixed-case dictionary form) may change the case.
+      if text ~= S.raw and text == S.raw:upper() and not env.names[S.raw] then
+        text = S.raw
+      end
+      commit_word(env, ctx, text)
       return kAccepted
     end
     local input = ctx.input or ""
