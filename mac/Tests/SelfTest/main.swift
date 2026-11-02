@@ -173,5 +173,20 @@ for (keys, want) in [("a", "a"), ("as", "as"), ("abc", "abc"), ("abcd", "abcd"),
   check("\(keys) + shift tap stays literal", shiftTap(sess), want)
 }
 
+
+// A shifted run after the commit: further keys are typed literally, with the case
+// the OS produced (Caps Lock on/off is handled by the OS, not by us).
+for (chars, mods, cont, want) in [
+  ("B", RimeKeys.Mods.shift, true, true),
+  ("b", RimeKeys.Mods.shift, true, true),
+  (";", RimeKeys.Mods.shift, true, true),
+  ("b", [], true, false),
+  ("b", RimeKeys.Mods.shift, false, false),
+  ("b", [.shift, .command], true, false),
+] {
+  let got = ShiftEnglish.shouldTypeDirectly(chars: chars, mods: mods, continuing: cont)
+  check("shift-run chars=\(chars) cont=\(cont)", got ? "true" : "false", want ? "true" : "false")
+}
+
 print(failures == 0 ? "ALL PASS" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

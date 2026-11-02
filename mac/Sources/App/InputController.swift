@@ -9,6 +9,9 @@ final class KINFXInputController: IMKInputController {
   /// composition by the time focus leaves (macOS can clear the marked text first),
   /// so an unfinished English run is not silently dropped on blur.
   private var pendingLetters: String = ""
+  /// True while a Shift run is being typed literally, so later letters keep the
+  /// case the OS produced instead of becoming new composition codes.
+  private var shiftRun = false
 
   private var engine: Engine { AppDelegate.engine }
 
@@ -79,6 +82,18 @@ final class KINFXInputController: IMKInputController {
     guard let client = sender as? IMKTextInput, ensureSession(),
           let (k, m) = RimeKeys.keyDown(keyCode: keyCode, chars: chars, bare: bare, mods: mods) else { return false }
 
+    // Continuing a shifted run: type the key as-is (correct case with Caps Lock on
+    // or off) instead of letting it start another composition.
+    if ShiftEnglish.shouldTypeDirectly(chars: chars, mods: mods, continuing: shiftRun) {
+      if let text = chars, !text.isEmpty {
+        client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+        Trace.log("  shift-run insert [\(text)]")
+      }
+      update(client)
+      return true
+    }
+    if !mods.contains(.shift) { shiftRun = false }
+
     // Shift + letter on a 1–2 code composition: commit the codes as English, then
     // type the letter. A bare Shift tap cannot be seen on this macOS (no
     // flagsChanged reaches the controller), so this is the reachable gesture.
@@ -89,6 +104,7 @@ final class KINFXInputController: IMKInputController {
         client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
         if let literal = chars, !literal.isEmpty {
           client.insertText(literal, replacementRange: NSRange(location: NSNotFound, length: 0))
+          shiftRun = true
         }
         update(client)
         return true

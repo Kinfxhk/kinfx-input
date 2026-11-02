@@ -23,4 +23,15 @@ enum ShiftEnglish {
     guard (1...2).contains(code.count) else { return false }
     return code.allSatisfy { $0.isASCII && $0.isLetter }
   }
+
+  /// A shifted run continues after the first commit: every further Shift+key must be
+  /// typed straight into the document, not appended to a new composition.
+  /// Caps Lock is deliberately ignored here — the character the OS produced already
+  /// carries the right case (Shift+A -> A, Caps Lock+Shift+A -> a, Caps Lock+A -> A).
+  static func shouldTypeDirectly(chars: String?, mods: RimeKeys.Mods, continuing: Bool) -> Bool {
+    guard mods.contains(.shift), !mods.contains(.control), !mods.contains(.option), !mods.contains(.command) else { return false }
+    guard let chars = chars, chars.count == 1, let scalar = chars.unicodeScalars.first else { return false }
+    guard scalar.isASCII, scalar.value >= 0x20, scalar.value != 0x7f else { return false }
+    return continuing
+  }
 }
