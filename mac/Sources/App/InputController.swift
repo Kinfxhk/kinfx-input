@@ -5,6 +5,10 @@ import InputMethodKit
 final class KINFXInputController: IMKInputController {
   private var session: UInt = 0
   private var lastMods: RimeKeys.Mods = []
+  /// What the preedit showed last. Used only when the engine has already lost the
+  /// composition by the time focus leaves (macOS can clear the marked text first),
+  /// so an unfinished English run is not silently dropped on blur.
+  private var pendingLetters: String = ""
 
   private var engine: Engine { AppDelegate.engine }
 
@@ -105,6 +109,8 @@ final class KINFXInputController: IMKInputController {
       client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
     }
     let view = engine.view(session)
+    let letters = view.preedit.trimmingCharacters(in: .whitespaces)
+    pendingLetters = (1...8).contains(letters.count) && letters.allSatisfy { $0.isASCII && $0.isLetter } ? letters : ""
     if !view.candidates.isEmpty { Trace.log("  view page=\(view.pageSize) n=\(view.candidates.count) layout=\(engine.settings["candidate_layout"] ?? "vertical")") }
     let attrs = mark(forStyle: kTSMHiliteSelectedRawText, at: NSRange(location: 0, length: 0)) as? [NSAttributedString.Key: Any] ?? [:]
     let pre = NSAttributedString(string: view.preedit, attributes: attrs)
@@ -125,9 +131,15 @@ final class KINFXInputController: IMKInputController {
   }
 
   private func blur(_ client: IMKTextInput) {
-    let text = engine.blur(session) ?? ""
-    Trace.log("  blur commit [\(text)]")
-    client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+    let committed = engine.blur(session) ?? ""
+    // The engine keeps the run normally; if focus loss already cleared it, fall back
+    // to the letters the preedit showed so an unfinished English run survives.
+    let text = committed.isEmpty ? pendingLetters : committed
+    Trace.log("  blur commit [\(text)] engine=[\(committed)] shadow=[\(pendingLetters)]")
+    pendingLetters = ""
+    if !text.isEmpty {
+      client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+    }
     AppDelegate.panel.hide()
   }
 

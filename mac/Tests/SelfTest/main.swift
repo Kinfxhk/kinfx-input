@@ -130,7 +130,11 @@ check("plain code drops before Ctrl+V", { () -> String in
 check("ofc1", type("ofc1").commit, "\u{4EBA}\u{985E}")
 
 // 0.1.4: focus left (F35) keeps what was typed, then vd1 still types.
-for (keys, want) in [("hel", "hel"), ("vdhel", "vdhel"), ("vd", "\u{597D}"), ("vd1hel", "\u{597D}hel"), ("ofca", "ofca"), ("he", "\u{53CD}")] {
+// v0.1.11: a 1–2 letter run keeps its letters on blur (english/blur_short=letters);
+// the earlier Windows behaviour commits the first candidate and is still available
+// by setting english/blur_short: commit.
+for (keys, want) in [("hel", "hel"), ("vdhel", "vdhel"), ("vd", "vd"), ("vd1hel", "\u{597D}hel"),
+                     ("ofca", "ofca"), ("he", "he"), ("as", "as"), ("a", "a")] {
   let sess = engine.newSession(); defer { engine.destroy(sess) }
   var out = ""
   for ch in keys.unicodeScalars { _ = engine.key(sess, Int32(ch.value), 0); if let c = engine.takeCommit(sess) { out += c } }

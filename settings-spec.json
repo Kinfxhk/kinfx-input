@@ -13,6 +13,8 @@
      "options": [["hot", "熱門"], ["all", "全部"], ["off", "關閉"]], "rime_value": {"off": "none"}},
     {"key": "empty_shift", "label": "未輸入時按左 Shift", "rime_key": "english/empty_shift",
      "options": [["noop", "不動作"], ["ascii", "臨時英文"]]},
+    {"key": "short_blur", "label": "短碼離開焦點", "rime_key": "english/blur_short",
+     "options": [["letters", "保留英文字母"], ["commit", "上屏首選字"]]},
     {"key": "preedit", "label": "預編輯顯示", "rime_key": "english/preedit",
      "options": [["letters", "字母"], ["radicals", "字根"]]},
     {"key": "candidate_layout", "label": "選字表", "rime_key": null,

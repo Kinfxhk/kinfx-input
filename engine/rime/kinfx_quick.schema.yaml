@@ -143,6 +143,8 @@ english:
   mode: smart
   # 冇打字撳左 Shift：noop＝乜都唔做（預設，避免誤觸入咗底線英文模式）｜ascii＝librime 臨時英文
   empty_shift: noop
+  # 短碼（1–2 個字母）離開焦點（撳第二個位、換視窗）：letters＝留住字母（預設）｜commit＝上屏首選字
+  blur_short: letters
   # 唔喺詞表嘅英文（公司名、識別字）：英文開頭夠 hold_min 個字母之後，再留多 hold_extra 個；
   # 7 個字母或以上（unknown_space_min）撳空白上屏，其餘撳左 Shift。英文詞嘅開頭（const、async）
   # 5 個字母起都可以撳空白，6 個字母除外（三對速成碼，空白係翻頁）。0＝關。

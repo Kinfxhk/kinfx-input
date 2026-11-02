@@ -459,6 +459,7 @@ local function read_env(env)
   -- english/empty_shift: noop (default; a Left Shift tap with nothing typed
   -- does nothing) | ascii (librime inline_ascii: switch to English).
   env.empty_shift = config_str(config, "english/empty_shift", "noop")
+  env.blur_short = config_str(config, "english/blur_short", "letters")
   -- english/hold_min: once an English prefix of this many letters breaks,
   -- keep holding up to hold_extra more letters as an unknown word (company /
   -- product names). 0 = off. Chinese output is still v0.4.1 for every key
@@ -812,7 +813,11 @@ end
 -- what Return gives (vd -> 好, ofc -> 人類, as Microsoft Quick commits on blur).
 local BLUR = 0xffe0
 local function blur_english(env, ctx)
-  return env.smart and (env.latin or env.dot or latin_token(ctx) or R.alive
+  local input = ctx.input or ""
+  -- 1–2 個字母嘅短碼：預設當英文留住（同 Shift+字母一致），可設 commit 回復 Windows 行為
+  local short = env.blur_short ~= "commit" and #input <= 2 and input:match("^[a-z]+$") ~= nil
+      and not chinese_held(ctx)
+  return env.smart and (env.latin or env.dot or latin_token(ctx) or R.alive or short
     or (S.tracking and #S.raw >= 3 and not chinese_held(ctx)))
 end
 
@@ -846,6 +851,9 @@ function blur_text(env, ctx)
   end
   if not blur_english(env, ctx) then
     return S.pending .. ctx:get_commit_text()
+  end
+  if #input <= 2 and input:match("^[a-z]+$") and env.blur_short ~= "commit" then
+    return input
   end
   if env.latin then
     return input
