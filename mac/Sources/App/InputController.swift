@@ -64,9 +64,33 @@ final class KINFXInputController: IMKInputController {
     return handled
   }
 
+  /// Press then release Left Shift in the engine, which is the commit path
+  /// `english_mix.lua` runs when a Shift tap ends a short composition.
+  private func tapLeftShift() {
+    if let (k, m) = RimeKeys.flagsChanged(keyCode: 56, mods: [.shift]) { _ = engine.key(session, k, m) }
+    if let (k, m) = RimeKeys.flagsChanged(keyCode: 56, mods: []) { _ = engine.key(session, k, m) }
+  }
+
   private func keyDown(_ keyCode: UInt16, _ chars: String?, _ bare: String?, _ mods: RimeKeys.Mods, _ sender: Any!) -> Bool {
     guard let client = sender as? IMKTextInput, ensureSession(),
           let (k, m) = RimeKeys.keyDown(keyCode: keyCode, chars: chars, bare: bare, mods: mods) else { return false }
+
+    // Shift + letter on a 1–2 code composition: commit the codes as English, then
+    // type the letter. A bare Shift tap cannot be seen on this macOS (no
+    // flagsChanged reaches the controller), so this is the reachable gesture.
+    if ShiftEnglish.shouldCommit(preedit: engine.view(session).preedit, mods: mods, chars: chars) {
+      tapLeftShift()
+      if let text = engine.takeCommit(session) {
+        Trace.log("  shift-english commit [\(text)]")
+        client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+        if let literal = chars, !literal.isEmpty {
+          client.insertText(literal, replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
+        update(client)
+        return true
+      }
+      // nothing was committed (empty or non-code composition): fall through
+    }
     Trace.log("  key k=\(String(k, radix: 16)) m=\(String(m, radix: 16))")
     let handled = engine.key(session, k, m)
     update(client)

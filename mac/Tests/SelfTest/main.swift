@@ -139,5 +139,35 @@ for (keys, want) in [("hel", "hel"), ("vdhel", "vdhel"), ("vd", "\u{597D}"), ("v
   check("\(keys) blur keeps text", out, want + "\u{597D}")
 }
 
+
+// Shift + letter on a short composition (ShiftEnglish). A bare Shift tap never
+// reaches the controller on current macOS (0 flagsChanged events), so this is the
+// gesture the controller can actually see.
+for (pre, mods, key, want) in [
+  ("a", RimeKeys.Mods.shift, "x", true),
+  ("as", RimeKeys.Mods.shift, "x", true),
+  ("as", RimeKeys.Mods.shift, "1", true),
+  ("asd", RimeKeys.Mods.shift, "x", false),
+  ("as", [], "x", false),
+  ("as", [.shift, .command], "x", false),
+  ("", RimeKeys.Mods.shift, "x", false),
+  ("as", RimeKeys.Mods.shift, "\u{4E2D}", false),
+] {
+  let got = ShiftEnglish.shouldCommit(preedit: pre, mods: mods, chars: key)
+  check("shift-english preedit=\(pre) key=\(key)", got ? "true" : "false", want ? "true" : "false")
+}
+
+// The commit the controller triggers: press+release Left Shift through the engine.
+func shiftTap(_ sess: UInt) -> String {
+  _ = engine.key(sess, 0xffe1, 1)
+  _ = engine.key(sess, 0xffe1, 0x40000000)
+  return engine.takeCommit(sess) ?? ""
+}
+for (keys, want) in [("a", "a"), ("as", "as"), ("abc", "abc"), ("abcd", "abcd"), ("abcde", "abcde")] {
+  let sess = engine.newSession(); defer { engine.destroy(sess) }
+  for ch in keys.unicodeScalars { _ = engine.key(sess, Int32(ch.value), 0); _ = engine.takeCommit(sess) }
+  check("\(keys) + shift tap stays literal", shiftTap(sess), want)
+}
+
 print(failures == 0 ? "ALL PASS" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)
