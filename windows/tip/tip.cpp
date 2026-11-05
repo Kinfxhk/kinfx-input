@@ -3,6 +3,7 @@
 #include <msctf.h>
 #include <olectl.h>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 #include "chord.h"
@@ -146,8 +147,9 @@ class CandWin {
     if (fgRoot_) SetTimer(hwnd_, 2, 250, nullptr);
     InvalidateRect(hwnd_, nullptr, TRUE);
   }
-  void Hide() {
-    if (!hwnd_ || hintOn_) return;  // the hint owns the window for its 400 ms
+  void Hide(bool force = false) {
+    if (!hwnd_ || (hintOn_ && !force)) return;  // focus loss also cancels a mode hint
+    if (force) { hintOn_ = false; KillTimer(hwnd_, 1); items_.clear(); }
     KillTimer(hwnd_, 2);
     ShowWindow(hwnd_, SW_HIDE);
   }
@@ -182,6 +184,7 @@ class CandWin {
     SetWindowLongPtrW(hwnd_, GWLP_USERDATA, (LONG_PTR)this);
   }
   static LRESULT CALLBACK Proc(HWND h, UINT m, WPARAM w, LPARAM l) {
+    if (m == WM_NCHITTEST) return HTTRANSPARENT;  // keyboard-only panel must not intercept clicks on another field
     if (m == WM_MOUSEACTIVATE) return MA_NOACTIVATE;
     if (m == WM_TIMER) {
       auto *self = (CandWin *)GetWindowLongPtrW(h, GWLP_USERDATA);
@@ -246,7 +249,8 @@ class CandWin {
 // ---------- edit session helper ----------
 class EditSession : public ITfEditSession {
  public:
-  explicit EditSession(std::function<void(TfEditCookie)> f) : f_(std::move(f)) {}
+  explicit EditSession(std::function<void(TfEditCookie)> f) : f_(std::move(f)) { InterlockedIncrement(&g_refs); }
+  ~EditSession() { InterlockedDecrement(&g_refs); }
   STDMETHODIMP QueryInterface(REFIID r, void **p) override {
     if (r == IID_IUnknown || r == IID_ITfEditSession) { *p = this; AddRef(); return S_OK; }
     *p = nullptr;
@@ -262,7 +266,8 @@ class EditSession : public ITfEditSession {
 };
 
 // ---------- the text service ----------
-class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCompositionSink {
+class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCompositionSink,
+            public ITfThreadMgrEventSink, public ITfTextEditSink {
  public:
   Tip() { InterlockedIncrement(&g_refs); }
   ~Tip() { InterlockedDecrement(&g_refs); }
@@ -271,6 +276,8 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     if (r == IID_IUnknown || r == IID_ITfTextInputProcessor || r == IID_ITfTextInputProcessorEx) *p = (ITfTextInputProcessorEx *)this;
     else if (r == IID_ITfKeyEventSink) *p = (ITfKeyEventSink *)this;
     else if (r == IID_ITfCompositionSink) *p = (ITfCompositionSink *)this;
+    else if (r == IID_ITfThreadMgrEventSink) *p = (ITfThreadMgrEventSink *)this;
+    else if (r == IID_ITfTextEditSink) *p = (ITfTextEditSink *)this;
     else { *p = nullptr; return E_NOINTERFACE; }
     AddRef();
     return S_OK;
@@ -288,6 +295,12 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
       km->Release();
     }
     bool ok = kx::Start();
+    ITfSource *source = nullptr;
+    if (SUCCEEDED(tm_->QueryInterface(IID_ITfSource, (void **)&source))) {
+      source->AdviseSink(IID_ITfThreadMgrEventSink, (ITfThreadMgrEventSink *)this, &threadCookie_);
+      source->Release();
+    }
+    RefreshFocus();
     Trace(std::string("activate started=") + (ok ? "1" : "0"));
     // Language bar button (中/英). The manager advises its ITfLangBarItemSink during AddItem, so the
     // item must already be alive: Init() is called on our own reference.
@@ -305,6 +318,15 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   }
   STDMETHODIMP Deactivate() override {
     Trace("deactivate");
+    Blur();
+    TrackContext(nullptr);
+    ITfSource *source = nullptr;
+    if (tm_ && threadCookie_ != TF_INVALID_COOKIE &&
+        SUCCEEDED(tm_->QueryInterface(IID_ITfSource, (void **)&source))) {
+      source->UnadviseSink(threadCookie_);
+      source->Release();
+    }
+    threadCookie_ = TF_INVALID_COOKIE;
     if (lb_) {
       ITfLangBarItemMgr *lb;
       if (tm_ && SUCCEEDED(tm_->QueryInterface(IID_ITfLangBarItemMgr, (void **)&lb))) {
@@ -321,7 +343,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     }
     if (sess_) { kx_destroy(sess_); sess_ = 0; }
     cand_.Destroy();
-    if (comp_) { comp_->Release(); comp_ = nullptr; }
+
     if (tm_) { tm_->Release(); tm_ = nullptr; }
     return S_OK;
   }
@@ -329,11 +351,12 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   // ITfKeyEventSink. Rime is stateful, so the key is processed once in OnTest* and the
   // result reused by the following On* call for the same key.
   STDMETHODIMP OnSetFocus(BOOL fg) override {
-    if (fg) kx::ReloadIfChanged();
-    else cand_.Hide();
+    if (fg) { kx::ReloadIfChanged(); RefreshFocus(); }
+    else { Blur(); TrackContext(nullptr); }
     return S_OK;
   }
   STDMETHODIMP OnTestKeyDown(ITfContext *c, WPARAM w, LPARAM l, BOOL *eaten) override {
+    EnsureContext(c);
     *eaten = Process(w, l, false);
     Tail(c);
     // Paste: claim it here so OnKeyDown runs (sync edit session commits the held text), then OnKeyDown passes it to the app.
@@ -341,6 +364,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     return S_OK;
   }
   STDMETHODIMP OnTestKeyUp(ITfContext *c, WPARAM w, LPARAM l, BOOL *eaten) override {
+    EnsureContext(c);
     *eaten = Process(w, l, true);
     Tail(c);
     return S_OK;
@@ -353,31 +377,179 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     return S_OK;
   }
 
-  STDMETHODIMP OnCompositionTerminated(TfEditCookie ec, ITfComposition *) override {
-    // The app ended the composition (click elsewhere): Rime commits what the user was typing
-    // (F35 = blur key in english_mix.lua: an English run as letters, Sucheng as Return gives),
-    // and that text replaces the preedit, so nothing typed disappears.
+  STDMETHODIMP OnCompositionTerminated(TfEditCookie ec, ITfComposition *composition) override {
+    // Late notifications for a detached/ended composition must not clear the new field's Rime state.
+    if (comp_ && Same(composition, comp_)) Blur(true, ec);
+    return S_OK;
+  }
+
+  // ITfThreadMgrEventSink: document changes alone are insufficient (WinForms can reuse a context).
+  STDMETHODIMP OnInitDocumentMgr(ITfDocumentMgr *) override { return S_OK; }
+  STDMETHODIMP OnUninitDocumentMgr(ITfDocumentMgr *doc) override {
+    ITfDocumentMgr *owner = nullptr;
+    if (focus_ && SUCCEEDED(focus_->GetDocumentMgr(&owner))) {
+      if (Same(doc, owner)) { Blur(); TrackContext(nullptr); }
+      owner->Release();
+    }
+    return S_OK;
+  }
+  STDMETHODIMP OnSetFocus(ITfDocumentMgr *doc, ITfDocumentMgr *) override {
+    ITfContext *c = nullptr;
+    if (doc) doc->GetTop(&c);
+    EnsureContext(c);
+    if (c) c->Release();
+    return S_OK;
+  }
+  STDMETHODIMP OnPushContext(ITfContext *) override { RefreshFocus(); return S_OK; }
+  STDMETHODIMP OnPopContext(ITfContext *c) override {
+    if (Same(c, focus_)) { Blur(); TrackContext(nullptr); }
+    RefreshFocus();
+    return S_OK;
+  }
+
+  STDMETHODIMP OnEndEdit(ITfContext *c, TfEditCookie ec, ITfEditRecord *record) override {
+    if (writing_ || !Same(c, focus_)) return S_OK;
+    const auto generation = generation_;
+    EnsureContext(c);
+    if (generation != generation_ || !Same(c, focus_)) return S_OK;
+    BOOL changed = FALSE;
+    if (!comp_ || !Same(c, owner_)) return S_OK;
+    comp_->AddRef();
+    auto composition = Adopt(comp_);
+    if (FAILED(record->GetSelectionStatus(&changed)) || !changed || generation != generation_) return S_OK;
+    TF_SELECTION sel = {};
+    ULONG count = 0;
+    ITfRange *range = nullptr;
+    if (SUCCEEDED(c->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &sel, &count)) && count == 1 && sel.range) {
+      LONG start = 0, end = 0;
+      if (generation == generation_ && Same(composition.get(), comp_) &&
+          SUCCEEDED(composition->GetRange(&range))) {
+        bool outside = FAILED(range->CompareStart(ec, sel.range, TF_ANCHOR_START, &start)) ||
+                       FAILED(range->CompareEnd(ec, sel.range, TF_ANCHOR_END, &end)) || start > 0 || end < 0;
+        range->Release();
+        if (outside && generation == generation_ && Same(composition.get(), comp_)) Blur();
+      }
+      sel.range->Release();
+    }
+    return S_OK;
+  }
+
+ private:
+  // Compare canonical COM identities, not interface addresses.
+  static bool Same(IUnknown *a, IUnknown *b) {
+    if (!a || !b) return a == b;
+    IUnknown *x = nullptr, *y = nullptr;
+    a->QueryInterface(IID_IUnknown, (void **)&x);
+    b->QueryInterface(IID_IUnknown, (void **)&y);
+    bool same = x && x == y;
+    if (x) x->Release();
+    if (y) y->Release();
+    return same;
+  }
+  template<class T> static std::shared_ptr<T> Adopt(T *p) {
+    return std::shared_ptr<T>(p, [](T *v) { if (v) v->Release(); });
+  }
+
+  void ResetInput() {
+    ++generation_;
+    pending_ = pendUp_ = pendEaten_ = paste_ = switch_ = hint_ = cands_ = false;
+    pendW_ = 0;
+    chord_ = KxChord();
+    last_ = POINT{-1, -1}; lastH_ = 0;
+    cand_.Hide(true);
+  }
+
+  void Blur(bool terminated = false, TfEditCookie ec = 0) {
+    // Detach BEFORE requesting a lock/ending a composition: TSF can reenter any sink here.
+    auto composition = Adopt(comp_);
+    auto context = Adopt(owner_);
+    comp_ = nullptr; owner_ = nullptr;
     std::wstring commit;
     if (sess_) {
-      kx_key(sess_, 0xffe0, 0);
+      kx_key(sess_, 0xffe0, 0);  // existing F35 blur policy, not a new candidate/space policy
       char *raw = kx_take_commit(sess_);
       commit = raw ? kx::Wide(raw) : L"";
       free(raw);
       kx_clear(sess_);
     }
-    if (comp_) {
-      ITfRange *r;
-      HRESULT g = comp_->GetRange(&r), h = E_FAIL;
-      if (SUCCEEDED(g)) { h = r->SetText(ec, 0, commit.c_str(), (LONG)commit.size()); r->Release(); }
-      Trace("blur commit [" + kx::Utf8(commit) + "] range=" + std::to_string(g) + " set=" + std::to_string(h));
-      comp_->Release();
-      comp_ = nullptr;
-    }
-    cand_.Hide();
-    return S_OK;
+    const auto generation = generation_ + 1;
+    ResetInput();
+    if (generation != generation_ || !composition || !context) return;
+    // Synchronous only: a delayed range can follow a reused context into another field.
+    // If the write lock fails, leave the existing document preedit untouched. The host owns
+    // its eventual termination; the F35 conversion is not guaranteed in that case.
+    auto finish = [this, composition, context, commit, terminated, generation](TfEditCookie cookie) {
+      if (generation != generation_) return;
+      ITfRange *range = nullptr;
+      if (!commit.empty() && SUCCEEDED(composition->GetRange(&range))) {
+        if (generation == generation_)
+          range->SetText(cookie, 0, commit.c_str(), (LONG)commit.size());
+        range->Release();
+      }
+      if (!terminated && generation == generation_) composition->EndComposition(cookie);
+    };
+    if (terminated) { finish(ec); return; }
+    auto *edit = new EditSession(finish);
+    HRESULT result = E_FAIL;
+    HRESULT request = context->RequestEditSession(id_, edit, TF_ES_SYNC | TF_ES_READWRITE, &result);
+    Trace("blur owner request=" + std::to_string((long)request) + " result=" + std::to_string((long)result));
+    edit->Release();
   }
 
- private:
+  void TrackContext(ITfContext *c) {
+    if (Same(c, focus_)) return;
+    if (focus_) {
+      ITfSource *source = nullptr;
+      if (editCookie_ != TF_INVALID_COOKIE && SUCCEEDED(focus_->QueryInterface(IID_ITfSource, (void **)&source))) {
+        source->UnadviseSink(editCookie_);
+        source->Release();
+      }
+      focus_->Release();
+    }
+    focus_ = c; editCookie_ = TF_INVALID_COOKIE;
+    if (view_) { view_->Release(); view_ = nullptr; }
+    focusHwnd_ = nullptr; viewHwnd_ = nullptr;
+    if (focus_) {
+      focus_->AddRef();
+      ITfSource *source = nullptr;
+      if (SUCCEEDED(focus_->QueryInterface(IID_ITfSource, (void **)&source))) {
+        source->AdviseSink(IID_ITfTextEditSink, (ITfTextEditSink *)this, &editCookie_);
+        source->Release();
+      }
+    }
+  }
+
+  void EnsureContext(ITfContext *c) {
+    const auto generation = generation_;
+    ITfContextView *view = nullptr;
+    HWND hwnd = GetFocus(), viewHwnd = nullptr;
+    if (c && SUCCEEDED(c->GetActiveView(&view))) view->GetWnd(&viewHwnd);
+    if (generation_ != generation) { if (view) view->Release(); return; }
+    bool changed = !Same(c, focus_) || (focusHwnd_ && hwnd && focusHwnd_ != hwnd) ||
+                   (viewHwnd_ && viewHwnd && viewHwnd_ != viewHwnd) ||
+                   (view_ && view && !Same(view_, view));
+    Trace("ensure ctx=" + std::to_string((uintptr_t)c) + " focus=" + std::to_string((uintptr_t)focus_) + " hwnd=" + std::to_string((uintptr_t)hwnd) + " prev=" + std::to_string((uintptr_t)focusHwnd_) + " changed=" + std::to_string(changed));
+    if (changed) Blur();
+    // Blur resets once; any further reset means a nested focus transition won.
+    const auto expected = generation + (changed ? 1 : 0);
+    if (generation_ != expected) { if (view) view->Release(); return; }
+    TrackContext(c);
+    if (generation_ != expected) { if (view) view->Release(); return; }
+    if (view_) view_->Release();
+    view_ = view;
+    focusHwnd_ = hwnd; viewHwnd_ = viewHwnd;
+  }
+
+  void RefreshFocus() {
+    ITfDocumentMgr *doc = nullptr;
+    ITfContext *c = nullptr;
+    if (tm_ && SUCCEEDED(tm_->GetFocus(&doc)) && doc) {
+      doc->GetTop(&c);
+      doc->Release();
+    }
+    EnsureContext(c);
+    if (c) c->Release();
+  }
   bool Session() {
     if (!kx::Started()) return false;
     if (!sess_ || !kx_alive(sess_)) sess_ = kx_session("kinfx_quick");
@@ -508,6 +680,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   }
 
   bool Handle(ITfContext *c, WPARAM w, LPARAM l, bool up) {
+    EnsureContext(c);
     bool eaten = Process(w, l, up);
     pending_ = false;
     // Update the document even for keys Rime let through: e.g. Return after a pick
@@ -532,8 +705,10 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   }
 
   void Update(ITfContext *c) {
-    if (!sess_) return;
+    if (!sess_ || !c || !Same(c, focus_)) return;
+    const auto generation = generation_;
     SyncMode();
+    if (generation != generation_) return;
     char *raw = kx_take_commit(sess_);
     std::wstring commit = raw ? kx::Wide(raw) : L"";
     free(raw);
@@ -558,10 +733,17 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     cands_ = !cands.empty();  // the association list a pick leaves open counts as candidates
     POINT at = {-1, -1};
     int lineH = 0;
-    auto *es = new EditSession([&](TfEditCookie ec) { Write(ec, c, commit, pre, &at, &lineH); });
-    HRESULT hr;
-    c->RequestEditSession(id_, es, TF_ES_SYNC | TF_ES_READWRITE, &hr);
+    auto *es = new EditSession([&](TfEditCookie ec) {
+      if (generation != generation_ || !Same(c, focus_)) return;
+      ++writing_;
+      Write(ec, c, commit, pre, &at, &lineH, generation);
+      --writing_;
+    });
+    HRESULT hr = E_FAIL;
+    HRESULT request = c->RequestEditSession(id_, es, TF_ES_SYNC | TF_ES_READWRITE, &hr);
     es->Release();
+    if (generation != generation_) return;
+    if (FAILED(request) || FAILED(hr)) { cand_.Hide(true); return; }
     if (cands.empty()) { cand_.Hide(); return; }
     if (at.x < 0 && last_.x >= 0) { at = last_; lineH = lastH_; }  // TSF gave no extent: stay where the preedit was
     if (at.x < 0) at = CaretAt(&lineH);
@@ -570,29 +752,36 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   }
 
   // Commit text and/or preedit through one TSF composition.
-  void Write(TfEditCookie ec, ITfContext *c, const std::wstring &commit, const std::wstring &pre, POINT *at, int *lineH) {
+  void Write(TfEditCookie ec, ITfContext *c, const std::wstring &commit, const std::wstring &pre, POINT *at, int *lineH,
+             unsigned long long generation) {
+    if (generation != generation_ || !Same(c, focus_) || (comp_ && !Same(c, owner_))) return;
     if (!commit.empty()) {
       if (!comp_) Begin(ec, c);
+      if (generation != generation_ || !Same(c, owner_)) return;
       if (comp_) {
+        comp_->AddRef();
+        auto composition = Adopt(comp_);
         ITfRange *r;
-        if (SUCCEEDED(comp_->GetRange(&r))) {
+        if (SUCCEEDED(composition->GetRange(&r))) {
           r->SetText(ec, 0, commit.c_str(), (LONG)commit.size());
+          if (generation != generation_ || !Same(composition.get(), comp_)) { r->Release(); return; }
           r->Collapse(ec, TF_ANCHOR_END);
           SetSel(ec, c, r);
           r->Release();
         }
-        comp_->EndComposition(ec);
-        comp_->Release();
-        comp_ = nullptr;
+        if (generation != generation_ || !Same(composition.get(), comp_)) return;
+        End(ec);
       }
     }
+    if (generation != generation_ || !Same(c, focus_)) return;
     if (pre.empty()) {
       if (comp_) {
+        comp_->AddRef();
+        auto composition = Adopt(comp_);
         ITfRange *r;
-        if (SUCCEEDED(comp_->GetRange(&r))) { r->SetText(ec, 0, L"", 0); r->Release(); }
-        comp_->EndComposition(ec);
-        comp_->Release();
-        comp_ = nullptr;
+        if (SUCCEEDED(composition->GetRange(&r))) { r->SetText(ec, 0, L"", 0); r->Release(); }
+        if (generation != generation_ || !Same(composition.get(), comp_)) return;
+        End(ec);
       }
       TF_SELECTION sel = {};
       ULONG n = 0;
@@ -602,24 +791,30 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
       }
       return;
     }
+    if (generation != generation_ || !Same(c, focus_)) return;
     if (!comp_) Begin(ec, c);
-    if (!comp_) return;
+    if (!comp_ || generation != generation_ || !Same(c, owner_)) return;
+    comp_->AddRef();
+    auto composition = Adopt(comp_);
     ITfRange *r;
-    if (FAILED(comp_->GetRange(&r))) return;
+    if (FAILED(composition->GetRange(&r))) return;
     r->SetText(ec, 0, pre.c_str(), (LONG)pre.size());
+    if (generation != generation_ || !Same(composition.get(), comp_)) { r->Release(); return; }
     ITfRange *end;
     if (SUCCEEDED(r->Clone(&end))) { end->Collapse(ec, TF_ANCHOR_END); SetSel(ec, c, end); end->Release(); }
-    Below(ec, c, r, at, lineH);
+    if (generation == generation_ && Same(c, focus_)) Below(ec, c, r, at, lineH);
     r->Release();
   }
 
   // Screen point just below a text range, from the app's TSF view.
   void Below(TfEditCookie ec, ITfContext *c, ITfRange *r, POINT *at, int *lineH) {
+    const auto generation = generation_;
     ITfContextView *v;
     if (FAILED(c->GetActiveView(&v))) return;
     RECT rc;
     BOOL clipped;
-    if (SUCCEEDED(v->GetTextExt(ec, r, &rc, &clipped)) && (rc.left || rc.bottom)) {
+    if (SUCCEEDED(v->GetTextExt(ec, r, &rc, &clipped)) && (rc.left || rc.bottom) &&
+        generation == generation_ && Same(c, focus_)) {
       at->x = rc.left; at->y = rc.bottom + 2;
       *lineH = rc.bottom - rc.top;
       last_ = *at; lastH_ = *lineH;
@@ -628,17 +823,36 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   }
 
   void Begin(TfEditCookie ec, ITfContext *c) {
+    const auto generation = generation_;
     ITfInsertAtSelection *ins;
     ITfContextComposition *cc;
     if (FAILED(c->QueryInterface(IID_ITfInsertAtSelection, (void **)&ins))) return;
     ITfRange *r = nullptr;
     if (SUCCEEDED(ins->InsertTextAtSelection(ec, TF_IAS_QUERYONLY, nullptr, 0, &r)) &&
         SUCCEEDED(c->QueryInterface(IID_ITfContextComposition, (void **)&cc))) {
-      cc->StartComposition(ec, r, (ITfCompositionSink *)this, &comp_);
+      ITfComposition *composition = nullptr;
+      cc->StartComposition(ec, r, (ITfCompositionSink *)this, &composition);
+      if (composition) {
+        if (generation == generation_ && Same(c, focus_) && !comp_) {
+          comp_ = composition;
+          owner_ = c; owner_->AddRef();
+        } else {
+          // A focus callback reentered StartComposition. Never publish that stale range.
+          composition->EndComposition(ec);
+          composition->Release();
+        }
+      }
       cc->Release();
     }
     if (r) r->Release();
     ins->Release();
+  }
+
+  void End(TfEditCookie ec) {
+    auto composition = Adopt(comp_);
+    auto context = Adopt(owner_);
+    comp_ = nullptr; owner_ = nullptr;
+    if (composition) composition->EndComposition(ec);
   }
 
   static void SetSel(TfEditCookie ec, ITfContext *c, ITfRange *r) {
@@ -654,6 +868,13 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   TfClientId id_ = 0;
   uintptr_t sess_ = 0;
   ITfComposition *comp_ = nullptr;
+  ITfContext *owner_ = nullptr;  // the ONLY context whose edit cookie can touch comp_'s range
+  ITfContext *focus_ = nullptr;
+  ITfContextView *view_ = nullptr;
+  HWND focusHwnd_ = nullptr, viewHwnd_ = nullptr;
+  DWORD threadCookie_ = TF_INVALID_COOKIE, editCookie_ = TF_INVALID_COOKIE;
+  unsigned long long generation_ = 0;
+  unsigned writing_ = 0;
   POINT last_ = {-1, -1};
   int lastH_ = 0;
   CandWin cand_;
