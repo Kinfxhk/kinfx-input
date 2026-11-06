@@ -93,6 +93,37 @@ local function user_file(name)
   return dir .. "/" .. name
 end
 
+-- Global, cross-context full_shape. librime's Shift+Space toggle is a per-
+-- context option that resets to the schema default (half-width) on every new
+-- context, so the width choice would be lost on a window/app switch. Persist
+-- the user's last toggle in the user data dir and restore it when a context is
+-- created, so full/half width survives owner changes until the next toggle.
+local function full_shape_state_path()
+  return user_file("kinfx_full_shape.state")
+end
+
+local function restore_full_shape(ctx)
+  local path = full_shape_state_path()
+  if not path then return end
+  local fh = io.open(path, "r")
+  if not fh then return end
+  local v = fh:read("*l")
+  fh:close()
+  if v == "1" or v == "0" then
+    ctx:set_option("full_shape", v == "1")
+  end
+end
+
+local function persist_full_shape(on)
+  local path = full_shape_state_path()
+  if not path then return end
+  local fh = io.open(path, "w")
+  if fh then
+    fh:write(on and "1" or "0")
+    fh:close()
+  end
+end
+
 -- About 350 short words; small enough for a Lua set.
 local unsafe_cache = nil
 local function load_unsafe()
@@ -1286,6 +1317,10 @@ local function func(key, env)
     env.assoc_tap = false
     if env.shift_down then env.shift_used = true end
     if env.rshift_down then env.rshift_used = true end
+    -- The key_binder toggles full_shape after this processor returns. Persist
+    -- the resulting width so the next context restores it: otherwise the
+    -- toggle would reset to the schema default on every window/app switch.
+    persist_full_shape(not env.engine.context:get_option("full_shape"))
     return kNoop -- the original key_binder still owns full_shape
   end
   if key.keycode == BLUR and not key:release() then
@@ -1372,23 +1407,22 @@ local function func(key, env)
     commit_text(env, string.char(key.keycode), true)
     return kAccepted
   end
-  -- Space follows the script of the text before it, mirroring punctuation:
-  -- after Latin/digit text (hello. / 60cm) it stays half-width under
-  -- full_shape; after CJK it falls through to the full-shape punctuator.
-  -- kinfx_digit_tail covers a bare digit run (60 + Space -> 60 , U+0020).
+  -- Space is always half-width, independent of full_shape and the preceding
+  -- script (idle, CJK, English, digits, or consecutive spaces): it bypasses the
+  -- full-shape formatter, so even under full_shape a space stays U+0020.
   -- ascii_mode space is already half-width (Fix A owns the ASCII path), so
-  -- leave its handled flag untouched.
+  -- leave its handled flag untouched. A composing Space is paging, not a
+  -- literal space: key_binder converts it to Page_Down before this path, so
+  -- the not ctx:is_composing() guard leaves candidate paging untouched.
   if r == kNoop and not key:release() and not (key:ctrl() or key:alt() or key:super())
-     and key.keycode == 0x20 and not ctx:is_composing() and not ctx:get_option("ascii_mode")
-     and (ctx:get_property("kinfx_punct_tail") == "latin"
-          or ctx:get_property("kinfx_digit_tail") == "1") then
+     and key.keycode == 0x20 and not ctx:is_composing() and not ctx:get_option("ascii_mode") then
     commit_text(env, " ", true)
     return kAccepted
   end
   -- A leading slash starts an ASCII command (/init, /yolo): the command leader
   -- stays half-width under full_shape (the same ASCII-path contract as English
   -- after punctuation), and it sets the Latin tail so the command's trailing
-  -- space/punctuation follow that context. A slash after CJK still follows
+  -- punctuation follows that context. A slash after CJK still follows
   -- full_shape (好/ -> 好／): tail == "other" there, so it falls through.
   if r == kNoop and not key:release() and not (key:ctrl() or key:alt() or key:super())
      and key.keycode == 0x2f and not ctx:is_composing()
@@ -1800,6 +1834,13 @@ return {
   processor = { init = init, fini = fini, func = function(key, env)
     activate(env)
     local ctx = env.engine.context
+    -- A fresh context starts at the schema default (half-width). Restore the
+    -- user's last full_shape toggle once, on the first key: init runs before
+    -- librime applies the switch defaults, so a restore there is overwritten.
+    if not env.full_shape_restored then
+      env.full_shape_restored = true
+      restore_full_shape(ctx)
+    end
     -- Native ascii_composer rejects idle letters, but full_shape's postprocessor
     -- may still sink them (without commit_notifier). Observe only that literal
     -- route, never an association placeholder or uncommitted inline preedit.

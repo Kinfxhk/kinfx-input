@@ -33,7 +33,7 @@ switches:
     states: [ 中文, 西文 ]
     abbrev: [ 中, Ａ ]
   - name: full_shape
-    reset: 1
+    reset: 0
     states: [ 半角, 全角 ]
   - name: simplification
     states: [ 漢字, 汉字 ]

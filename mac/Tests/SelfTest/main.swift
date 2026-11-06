@@ -209,10 +209,11 @@ check("Right remains Rime candidate paging key", km(RimeKeys.keyDown(keyCode: 12
 check("Left remains Rime candidate paging key", km(RimeKeys.keyDown(keyCode: 123, chars: nil, bare: nil, mods: [])), "ff51/0")
 
 
-// Space width follows the preceding script under full_shape. The schema sets
-// full_shape reset:1 and the apply() calls above redeploy (proven full_shape ON
-// here by the 好　 check), so Latin/digit tails must keep the space half-width
-// while a CJK tail follows full_shape. One fresh session per check.
+// Space is always half-width, independent of full_shape and the preceding
+// script. full_shape reset:0 defaults to half-width and now governs punctuation
+// only; Shift+Space toggles punctuation full-width and persists the choice
+// across sessions (the engine restores it on each new context). One fresh
+// session per check; the toggle checks net back to half-width.
 func typeSeq(_ keys: [(Int32, Int32)]) -> String {
   let sess = engine.newSession(); defer { engine.destroy(sess) }
   var out = ""
@@ -220,10 +221,19 @@ func typeSeq(_ keys: [(Int32, Int32)]) -> String {
   return out
 }
 func letters(_ s: String) -> [(Int32, Int32)] { s.unicodeScalars.map { (Int32($0.value), 0) } }
-check("full shape hao space full-width", typeSeq(letters("vd1") + [(0xff1b, 0), (0x20, 0)]), "好\u{3000}")
-check("full shape hello. space half-width", typeSeq(letters("hello.") + [(0x20, 0)]), "hello. ")
-check("full shape 60cm space half-width", typeSeq(letters("60cm") + [(0x20, 0)]), "60cm ")
-check("full shape bare 60 space half-width", typeSeq(letters("60") + [(0x20, 0)]), "60 ")
+let shiftSpace: [(Int32, Int32)] = [(0xffe1, 1), (0x20, 1), (0x20, (1 << 30) | 1), (0xffe1, 1 << 30)]
+// Space is half-width everywhere, even after CJK or a bare digit run.
+check("space hao half-width", typeSeq(letters("vd1") + [(0xff1b, 0), (0x20, 0)]), "好\u{0020}")
+check("space hao two half-width", typeSeq(letters("vd1") + [(0xff1b, 0), (0x20, 0), (0x20, 0)]), "好\u{0020}\u{0020}")
+check("space bare 60 two half-width", typeSeq(letters("60") + [(0x20, 0), (0x20, 0)]), "60\u{0020}\u{0020}")
+check("space hello. half-width", typeSeq(letters("hello.") + [(0x20, 0)]), "hello. ")
+check("space 60cm half-width", typeSeq(letters("60cm") + [(0x20, 0)]), "60cm ")
+// Punctuation follows full_shape (default half-width).
+check("comma hao half-width default", typeSeq(letters("vd1") + [(0x2c, 0)]), "好\u{002c}")
+check("comma hello half-width", typeSeq(letters("hello") + [(0x2c, 0)]), "hello,")
+// Shift+Space toggles punctuation full-width; space stays half-width.
+check("toggle full comma full-width", typeSeq(shiftSpace + letters("vd1") + [(0x2c, 0)]), "好\u{ff0c}")
+check("toggle full space still half-width", typeSeq(shiftSpace + letters("vd1") + [(0xff1b, 0), (0x20, 0)]), "好\u{0020}")
 
 print(failures == 0 ? "ALL PASS" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)
