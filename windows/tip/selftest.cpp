@@ -402,6 +402,35 @@ int main() {
     Check("backup write fails: bindings untouched", blocked + "/" + std::to_string(blocked70),
           before + "/" + std::to_string(chtVk));
     if (blocked != before) kx::RestoreHotkeys();
+    // Mac re-review P2: a malformed backup must fail closed: restore reports false, writes nothing
+    // from it and keeps the file (the user's original may still be recoverable by hand).
+    auto put = [](const std::wstring &p, const char *s) {
+      FILE *f = _wfopen(p.c_str(), L"wb");
+      if (f) { fputs(s, f); fclose(f); }
+    };
+    auto exists = [](const std::wstring &p) { return GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES; };
+    char valid[200];
+    snprintf(valid, sizeof valid,
+             "{\n \"modifiers\": %ld,\n \"virtual_key\": %ld,\n \"language_hotkey\": %ld,\n \"layout_hotkey\": %ld\n}\n",
+             reg(HK, L"Key Modifiers"), reg(HK, L"Virtual Key"), reg(TOG, L"Language Hotkey"), reg(TOG, L"Layout Hotkey"));
+    put(cbp, "{\n \"cht_modifiers\": 99999999999,\n \"cht_virtual_key\": 32\n}\n");
+    put(bp, valid);
+    bool r1 = kx::RestoreHotkeys();
+    Check("malformed CHT backup: restore false, file kept, 0x70 untouched",
+          std::to_string(r1) + "/" + std::to_string(exists(cbp)) + "/" + std::to_string(reg(HK70, L"Virtual Key")),
+          "0/1/" + std::to_string(chtVk));
+    DeleteFileW(cbp.c_str());
+    DeleteFileW(bp.c_str());
+    put(bp, "{\n \"modifiers\": 0,\n \"virtual_key\": 0,\n \"language_hotkey\": 1\n}\n");  // field missing
+    bool r2 = kx::RestoreHotkeys();
+    Check("malformed main backup: restore false, file kept, bindings untouched",
+          std::to_string(r2) + "/" + std::to_string(exists(bp)) + "/" + state(), "0/1/" + before);
+    DeleteFileW(bp.c_str());
+    put(bp, "{\n \"modifiers\": 0,\n \"virtual_key\": 0,\n \"language_hotkey\": 1\n}\n");
+    kx::TakeOverHotkeys();  // an invalid existing backup is rewritten from live values, never trusted
+    Check("takeover rewrites a malformed backup", std::to_string(kx::RestoreHotkeys()) + "/" + state(), "1/" + before);
+    DeleteFileW(bp.c_str());
+    DeleteFileW(cbp.c_str());
   }
   // 0.1.7 language bar button: text and GDI icon follow ascii_mode, and the button is a tray item.
   {

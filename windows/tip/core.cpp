@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <map>
 #include <regex>
 #include <sstream>
 #include <vector>
@@ -191,18 +192,36 @@ static const std::regex kChtMod("\"cht_modifiers\"\\s*:\\s*([0-9]+)"), kChtVk("\
 // A backup is usable only when it reads back with the fields restore needs. Takeover clears a binding
 // only after that holds: a failed or truncated write must never leave the user's original unrecoverable
 // (Mac review 2026-11-06, P1).
-static bool ChtBackupValid(const std::wstring &path) {
-  std::string t = ReadAll(path);
+// Strict parse: each field present exactly once, at most 10 digits (no stoul overflow) and in range.
+// Anything else is "malformed" and fails closed (Mac re-review 2026-11-07, P2).
+static bool ParseCht(const std::string &t, UINT *mod, UINT *vk) {
   std::smatch a, b;
-  return std::regex_search(t, a, kChtMod) && std::regex_search(t, b, kChtVk);
-}
-static bool HotkeyBackupValid(const std::wstring &path) {
-  std::string t = ReadAll(path);
-  for (auto k : {"\"modifiers\"", "\"virtual_key\"", "\"language_hotkey\"", "\"layout_hotkey\""})
-    if (t.find(k) == std::string::npos) return false;
+  if (!std::regex_search(t, a, kChtMod) || !std::regex_search(t, b, kChtVk)) return false;
+  if (std::regex_search(a.suffix().first, t.end(), kChtMod) || std::regex_search(b.suffix().first, t.end(), kChtVk)) return false;
+  if (a[1].length() > 10 || b[1].length() > 10) return false;
+  unsigned long long m = std::stoull(a[1]), v = std::stoull(b[1]);
+  if (m > 0xFFFF || v < 1 || v > 0xFE) return false;  // a backup is only written for a set binding
+  *mod = (UINT)m; *vk = (UINT)v;
   return true;
 }
-
+static bool ParseHotkeys(const std::string &t, std::map<std::string, long> *out) {
+  static const std::regex num("\"([a-z_]+)\"\\s*:\\s*(-?[0-9]{1,10})\\s*[,}\\n]");
+  std::map<std::string, long> v;
+  for (std::sregex_iterator it(t.begin(), t.end(), num), end; it != end; ++it) {
+    long long n = std::stoll((*it)[2]);
+    if (n < -1 || n > 0xFFFF || v.count((*it)[1])) return false;  // -1 = value was absent
+    v[(*it)[1]] = (long)n;
+  }
+  for (auto k : {"modifiers", "virtual_key", "language_hotkey", "layout_hotkey"})
+    if (!v.count(k)) return false;
+  if (out) *out = v;
+  return true;
+}
+static bool ChtBackupValid(const std::wstring &path) {
+  UINT m, v;
+  return ParseCht(ReadAll(path), &m, &v);
+}
+static bool HotkeyBackupValid(const std::wstring &path) { return ParseHotkeys(ReadAll(path), nullptr); }
 void TakeOverHotkeys() {
   {
     UINT mod = 0, vk = 0;
@@ -243,23 +262,24 @@ void TakeOverHotkeys() {
 bool RestoreHotkeys() {
   bool ok = true, any = false;
   {
-    std::string cht = ReadAll(ChtHotkeyBackup());
-    std::smatch a, b;
-    if (std::regex_search(cht, a, kChtMod) && std::regex_search(cht, b, kChtVk)) {
+    std::wstring cb = ChtHotkeyBackup();
+    if (GetFileAttributesW(cb.c_str()) != INVALID_FILE_ATTRIBUTES) {
       any = true;
-      UINT wm = (UINT)std::stoul(a[1]), wv = (UINT)std::stoul(b[1]), lm = 0, lv = 0;
-      ChtSet(wm, wv);
-      if (ChtGet(&lm, &lv) && lm == wm && lv == wv) DeleteFileW(ChtHotkeyBackup().c_str());
-      else ok = false;
+      UINT wm = 0, wv = 0, lm = 0, lv = 0;
+      if (!ParseCht(ReadAll(cb), &wm, &wv)) ok = false;  // malformed: keep it, report failure
+      else {
+        ChtSet(wm, wv);
+        if (ChtGet(&lm, &lv) && lm == wm && lv == wv) DeleteFileW(cb.c_str());
+        else ok = false;
+      }
     }
   }
-  std::string text = ReadAll(HotkeyBackup());
-  if (!text.empty()) {
+  std::wstring hb = HotkeyBackup();
+  if (GetFileAttributesW(hb.c_str()) != INVALID_FILE_ATTRIBUTES) {
     any = true;
-    static const std::regex num("\"([a-z_]+)\"\\s*:\\s*(-?[0-9]+)");
     std::map<std::string, long> v;
-    for (std::sregex_iterator it(text.begin(), text.end(), num), end; it != end; ++it) v[(*it)[1]] = std::stol((*it)[2]);
-    auto want = [&](const char *k) { return v.count(k) ? v[k] : -1L; };
+    if (!ParseHotkeys(ReadAll(hb), &v)) return false;  // malformed: touch nothing, keep the file
+    auto want = [&](const char *k) { return v[k]; };
     RegSet(kHotKeys, L"Key Modifiers", want("modifiers"));
     RegSet(kHotKeys, L"Virtual Key", want("virtual_key"));
     RegSet(kToggle, L"Language Hotkey", want("language_hotkey"), true);
@@ -268,13 +288,12 @@ bool RestoreHotkeys() {
                 RegGet(kHotKeys, L"Virtual Key") == want("virtual_key") &&
                 RegGet(kToggle, L"Language Hotkey") == want("language_hotkey") &&
                 RegGet(kToggle, L"Layout Hotkey") == want("layout_hotkey");
-    if (live) DeleteFileW(HotkeyBackup().c_str());
+    if (live) DeleteFileW(hb.c_str());
     else ok = false;
     NotifyInputChanged();
   }
   return any && ok;
 }
-
 static void PrepareUserDir() {
   std::wstring u = UserDir(), shared = InstallDir() + L"\\data";
   CreateDirectoryW(u.c_str(), nullptr);

@@ -24,8 +24,11 @@ class ChtHotkey(unittest.TestCase):
         body = CORE.split('bool RestoreHotkeys() {', 1)[1]
         self.assertIn('ChtSet(wm, wv);', body)
         # A backup is deleted only after the live values read back equal to it.
-        self.assertIn('if (ChtGet(&lm, &lv) && lm == wm && lv == wv) DeleteFileW(ChtHotkeyBackup().c_str());', body)
-        self.assertIn('if (live) DeleteFileW(HotkeyBackup().c_str());', body)
+        self.assertIn('if (ChtGet(&lm, &lv) && lm == wm && lv == wv) DeleteFileW(cb.c_str());', body)
+        self.assertIn('if (live) DeleteFileW(hb.c_str());', body)
+        # Mac re-review P2: a malformed backup fails closed (returns false, file kept).
+        self.assertIn('if (!ParseCht(ReadAll(cb), &wm, &wv)) ok = false;', body)
+        self.assertIn('if (!ParseHotkeys(ReadAll(hb), &v)) return false;', body)
         self.assertIn('return any && ok;', body)
 
     def test_selftest_never_takes_over_from_start(self):
