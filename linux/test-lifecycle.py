@@ -179,6 +179,7 @@ def _run_scenario(kind):
             e.lib.kx_set_option(e.native_session(h), b"full_shape", 1)
             text = keys(h, "vd1/")
             check(text == "好／", "slash-full-width-after-cjk", actual=text, expected="好／")
+            e.clear(h)  # fixture: reset the script tail so "/init" is a fresh leading-slash command
             text = keys(h, "/init ")
             check(text == "/init ", "leading-slash-command", actual=text, expected="/init ")
         else:
