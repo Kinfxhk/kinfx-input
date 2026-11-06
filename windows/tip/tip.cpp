@@ -136,13 +136,14 @@ class CandWin {
       SelectObject(dc, old);
       ReleaseDC(hwnd_, dc);
     }
-    // Paint and hit-test share one cell layout, so a panel shrunk to the room it has re-flows its
-    // candidates instead of clipping them (Mac review 2026-11-06 P2).
-    auto layout = [&](int maxW, int maxH) {
-      cells_ = kx::LayoutCells(widths, lineH_, vertical_, maxW, maxH, S(14), S(6), S(20), &ww, &wh);
-    };
-    auto measure = [&] { layout(1 << 30, 1 << 30); };
-    measure();
+    // Paint and hit-test share one cell layout (kx::FitCandidates), so a panel short of room
+    // re-flows its candidates into that room instead of clipping them (Mac review 2026-11-06 P2).
+    RECT wr0, cr0;
+    GetWindowRect(hwnd_, &wr0); GetClientRect(hwnd_, &cr0);
+    const int inset = max(0, (int)((wr0.right - wr0.left) - cr0.right) / 2);  // WS_BORDER per side
+    const kx::CandGeom geom{lineH_, S(14), S(6), S(20), 2, inset};
+    cells_ = kx::LayoutCells(widths, lineH_, vertical_, 1 << 30, 1 << 30, geom.padX, geom.padY, geom.gapX, &ww, &wh);
+    ww += 2 * inset; wh += 2 * inset;
     MONITORINFO mi = {sizeof mi};
     if (GetMonitorInfoW(MonitorFromPoint(at, MONITOR_DEFAULTTONEAREST), &mi)) {
       RECT wa = mi.rcWork;
@@ -153,25 +154,18 @@ class CandWin {
       // neither way becomes one row, and it never covers the line being typed.
       const kx::Rect area{wa.left, wa.top, wa.right, wa.bottom};
       const kx::Rect caretLine{at.x, at.y - 2 - lineAbove, at.x + 8, at.y - 2};
-      const bool fitsAbove = caretLine.top - 2 - wh >= area.top;
-      const bool fitsBelow = caretLine.bottom + 2 + wh <= area.bottom;
-      if (vertical_ && items_.size() > 1 && !fitsAbove && !fitsBelow) {
-        vertical_ = false;  // neither column direction fits: one row instead of spilling
-        measure();
-      }
+      // A list that fits neither above nor below is re-flowed (one row first, then wrapped rows or
+      // columns) inside the real room on one side of the caret; see kx::FitCandidates.
       POINT at2 = at;
-      int how = -1;
-      const bool preferAbove = vertical_ && items_.size() >= 5;
-      kx::Rect placed = kx::PlaceCandidate(caretLine, ww, wh, area, 2, preferAbove, &how);
-      if (placed.Width() < ww || placed.Height() < wh) {
-        // Shrunk: re-flow the candidates into the room PlaceCandidate found (vertical lists wrap
-        // into columns, rows wrap into lines), then place the re-flowed size.
-        const int natW = ww, natH = wh;
-        layout(vertical_ ? area.Width() : placed.Width(), vertical_ ? placed.Height() : area.Height());
-        placed = kx::PlaceCandidate(caretLine, ww, wh, area, 2, preferAbove, &how);
+      int how = -1, shown = 0;
+      bool vert = vertical_;
+      const int natW = ww, natH = wh;
+      kx::Rect placed = kx::FitCandidates(widths, vertical_, caretLine, area, geom, &cells_, &shown, &how, &vert);
+      vertical_ = vert;
+      if (placed.Width() != natW || placed.Height() != natH || shown != (int)items_.size())
         Trace("cand relayout " + std::to_string(natW) + "x" + std::to_string(natH) + " -> " +
-              std::to_string(ww) + "x" + std::to_string(wh));
-      }
+              std::to_string(placed.Width()) + "x" + std::to_string(placed.Height()) + " shown=" +
+              std::to_string(shown) + "/" + std::to_string(items_.size()));
       at2.x = placed.left;
       at2.y = placed.top;
       at = at2;
@@ -220,8 +214,8 @@ class CandWin {
     RECT rc; GetClientRect(hwnd_, &rc);
     for (size_t i = 0; i < cells_.size() && i < items_.size(); ++i) {
       const kx::Rect &c = cells_[i];
-      // A cell cut by the window edge only counts where it is visible.
-      if (pt.x >= c.left && pt.x < c.right && pt.x < rc.right && pt.y >= c.top && pt.y < c.bottom && pt.y < rc.bottom)
+      // Hidden cells are empty; a cell cut by the window edge only counts where it is visible.
+      if (!kx::IsEmpty(c) && pt.x >= c.left && pt.x < c.right && pt.x < rc.right && pt.y >= c.top && pt.y < c.bottom && pt.y < rc.bottom)
         return (int)i;
     }
     return -1;
@@ -297,7 +291,8 @@ class CandWin {
       SetTextColor(dc, RGB(0xee, 0xe6, 0xdc));
       HGDIOBJ old = SelectObject(dc, self->font_);
       for (size_t i = 0; i < self->items_.size() && i < self->cells_.size(); ++i)
-        TextOutW(dc, self->cells_[i].left, self->cells_[i].top, self->items_[i].c_str(), (int)self->items_[i].size());
+        if (!kx::IsEmpty(self->cells_[i]))  // hidden: does not fit even after re-flow
+          TextOutW(dc, self->cells_[i].left, self->cells_[i].top, self->items_[i].c_str(), (int)self->items_[i].size());
       SelectObject(dc, old);
       EndPaint(h, &ps);
       return 0;

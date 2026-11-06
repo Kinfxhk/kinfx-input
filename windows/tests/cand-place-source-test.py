@@ -10,8 +10,14 @@ class CandidatePlacement(unittest.TestCase):
         self.assertIn('#include "cand-place.h"', SRC)
 
     def test_show_uses_place_candidate(self):
-        self.assertIn('kx::PlaceCandidate(caretLine, ww, wh, area, 2,', SRC)
-        self.assertIn('vertical_ && items_.size() >= 5', SRC)
+        # 2026-11-07: Show's placement moved into the pure kx::FitCandidates (re-flow before the
+        # final size, Mac review P2 round 2); the >=5 tall-list rule moved with it.
+        self.assertIn('kx::FitCandidates(widths, vertical_, caretLine, area, geom, &cells_,', SRC)
+        self.assertIn('const bool preferAbove = vertical && n >= 5;', HDR)
+        self.assertIn('PlaceCandidate(caret, W + e, H + e, area, g.gap, preferAbove, how)', HDR)
+
+    def test_hidden_cells_neither_painted_nor_hit(self):
+        self.assertEqual(SRC.count('kx::IsEmpty('), 2)
 
     def test_show_uses_placed_size(self):
         # A shrunk placement must size the window too, not only move it.

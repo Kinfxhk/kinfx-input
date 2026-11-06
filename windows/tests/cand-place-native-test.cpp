@@ -98,6 +98,80 @@ int main() {
     Check("relayout: placed panel holds the re-flowed size", p.Width() == W && p.Height() == H);
     Check("relayout: caret line clear and inside area", !Intersects(p, midCaret) && p.top >= tiny.top && p.bottom <= tiny.bottom);
   }
+  // 15+. FitCandidates = the whole production Show placement path (orientation fallback, re-flow,
+  // final size, hidden cells). ok(): every non-hidden cell is inside the final client area, the
+  // panel is inside the work area and clear of the caret line, and cells are disjoint.
+  auto ok = [](const Rect &p, const std::vector<Rect> &c, const Rect &a, const Rect &caretR, int inset) {
+    const int cw = p.Width() - 2 * inset, ch = p.Height() - 2 * inset;
+    if (p.left < a.left || p.top < a.top || p.right > a.right || p.bottom > a.bottom) return false;
+    if (Intersects(p, caretR)) return false;
+    for (size_t i = 0; i < c.size(); ++i) {
+      if (IsEmpty(c[i])) continue;
+      if (c[i].left < 0 || c[i].top < 0 || c[i].right > cw || c[i].bottom > ch) return false;
+      for (size_t j = 0; j < i; ++j) if (!IsEmpty(c[j]) && Intersects(c[i], c[j])) return false;
+    }
+    return true;
+  };
+  auto hitLast = [](const std::vector<Rect> &c) {  // production HitItem predicate at the last cell's centre
+    const Rect &l = c.back();
+    if (IsEmpty(l)) return false;
+    const int x = (l.left + l.right) / 2, y = (l.top + l.bottom) / 2;
+    for (size_t i = 0; i < c.size(); ++i)
+      if (!IsEmpty(c[i]) && x >= c[i].left && x < c[i].right && y >= c[i].top && y < c[i].bottom) return i + 1 == c.size();
+    return false;
+  };
+  {
+    // Hermes 71f7d0d reproducer: 200% DPI, nine 380-px items, caret mid-screen in a 1280x640 area.
+    const Rect a{0, 0, 1280, 640};
+    const Rect cr{100, 300, 108, 348};
+    const CandGeom g{72, 28, 12, 40, 2, 0};
+    std::vector<int> w(9, 380);
+    std::vector<Rect> c; int shown = -1; bool vert = false;
+    Rect p = FitCandidates(w, true, cr, a, g, &c, &shown, &how, &vert);
+    Check("fit hermes repro: all 9 shown", shown == 9 && c.size() == 9);
+    Check("fit hermes repro: inside, caret clear, disjoint", ok(p, c, a, cr, 0));
+    Check("fit hermes repro: last item hit-testable", hitLast(c));
+    // Same with a 2-px border: client = window - border, still nothing clipped.
+    const CandGeom gb{72, 28, 12, 40, 2, 2};
+    p = FitCandidates(w, true, cr, a, gb, &c, &shown, &how, &vert);
+    Check("fit with border: all shown, inside client", shown == 9 && ok(p, c, a, cr, 2) && hitLast(c));
+  }
+  {
+    // Ordinary case unchanged: room above for a natural column -> natural size, one column.
+    const CandGeom g{30, 14, 6, 20, 2, 1};
+    std::vector<int> w(9, 60);
+    std::vector<Rect> c; int shown = -1; bool vert = false;
+    Rect p = FitCandidates(w, true, Rect{100, 500, 108, 530}, area, g, &c, &shown, &how, &vert);
+    Check("fit natural: unchanged column above", vert && how == 1 && p.Height() == 12 + 9 * 30 + 2 && shown == 9);
+    // Short list below.
+    std::vector<int> w3(3, 60);
+    p = FitCandidates(w3, true, caret, area, g, &c, &shown, &how, &vert);
+    Check("fit short: below, natural", how == 0 && vert && shown == 3 && p.top >= caret.bottom);
+    // Tall list fitting neither side becomes one row (the familiar fallback).
+    const Rect strip{0, 0, 1920, 300};
+    p = FitCandidates(w, true, Rect{100, 130, 108, 160}, strip, g, &c, &shown, &how, &vert);
+    Check("fit strip: one row", !vert && shown == 9 && c[8].top == c[0].top && ok(p, c, strip, Rect{100, 130, 108, 160}, 1));
+    // Narrow + short room: rows wrap, then columns, all shown.
+    const Rect narrow{0, 0, 400, 300};
+    std::vector<int> w12(12, 50);
+    p = FitCandidates(w12, true, Rect{20, 130, 28, 160}, narrow, g, &c, &shown, &how, &vert);
+    Check("fit narrow: all 12 shown and inside", shown == 12 && ok(p, c, narrow, Rect{20, 130, 28, 160}, 1) && hitLast(c));
+    // Degenerate: room smaller than one row -> defined fallback, no crash, no clipped visible cell.
+    const Rect tinyA{0, 0, 300, 40};
+    p = FitCandidates(w, true, Rect{0, 5, 8, 35}, tinyA, g, &c, &shown, &how, &vert);
+    Check("fit degenerate: defined fallback, inside area", shown >= 0 && shown < 9 && p.top >= tinyA.top && p.bottom <= tinyA.bottom);
+    bool clipped = false; const int cw = p.Width() - 2, ch = p.Height() - 2;
+    for (auto &r : c) if (!IsEmpty(r) && (r.right > cw || r.bottom > ch)) clipped = true;
+    Check("fit degenerate: hidden instead of half-drawn", !clipped);
+    // One item wider than the screen: hidden, the others still shown.
+    std::vector<int> wl{60, 5000, 60};
+    p = FitCandidates(wl, true, caret, area, g, &c, &shown, &how, &vert);
+    Check("fit long item: cut at the edge, all 3 shown and inside", shown == 3 && ok(p, c, area, caret, 1) && hitLast(c));
+    // Empty list: no cells, no crash.
+    std::vector<int> w0;
+    p = FitCandidates(w0, true, caret, area, g, &c, &shown, &how, &vert);
+    Check("fit empty: no cells", c.empty() && shown == 0);
+  }
   std::printf("%d FAIL\n", fails);
   return fails ? 1 : 0;
 }

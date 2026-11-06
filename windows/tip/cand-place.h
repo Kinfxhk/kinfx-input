@@ -101,5 +101,73 @@ inline std::vector<Rect> LayoutCells(const std::vector<int> &widths, int lineH, 
   return cells;
 }
 
+// The whole candidate-panel geometry of CandWin::Show, pure so the production path is testable.
+// 1. The natural layout (caller's orientation) wherever PlaceCandidate puts it unshrunk.
+// 2. Otherwise a re-flow bounded on BOTH axes by the real room: for the preferred side of the caret
+//    first, then the other, try rows wrapped to the area width and columns wrapped to the side's
+//    height; the first layout whose width fits the area and whose height fits that side wins. Such
+//    a panel always gets an unshrunk PlaceCandidate result, so no cell is clipped
+//    (Mac review 2026-11-06 P2, second round: the old orientation fallback re-flowed rows against
+//    the width only, and the second placement shrank the window again).
+// 3. Defined fallback when nothing fits (room smaller than one row, or one item wider than the
+//    screen): columns in the larger side, placed (and shrunk) by PlaceCandidate; every cell that is
+//    not entirely inside the client area becomes an empty Rect, so it is neither painted nor
+//    clickable. Keyboard selection still reaches it.
+// inset: window border per side (client = window minus 2*inset). Returns the window rect;
+// *cells: one cell per item in client coordinates (empty Rect = hidden); *visible: shown count.
+struct CandGeom { int lineH, padX, padY, gapX, gap, inset; };
+inline bool IsEmpty(const Rect &r) { return r.right <= r.left || r.bottom <= r.top; }
+inline Rect FitCandidates(const std::vector<int> &widths, bool vertical, Rect caret, const Rect &area,
+                          const CandGeom &g, std::vector<Rect> *cells, int *visible, int *how, bool *vertOut) {
+  const int n = (int)widths.size();
+  const bool preferAbove = vertical && n >= 5;
+  const int big = 1 << 30;
+  int W = 0, H = 0;
+  bool vert = vertical;
+  *cells = LayoutCells(widths, g.lineH, vert, big, big, g.padX, g.padY, g.gapX, &W, &H);
+  const int e = 2 * g.inset;  // LayoutCells sizes the client; the window adds the border
+  Rect placed = PlaceCandidate(caret, W + e, H + e, area, g.gap, preferAbove, how);
+  // A vertical list that fits neither above nor below is re-flowed too (rows first: the familiar
+  // single-row fallback), even when PlaceCandidate could hang it beside the caret.
+  const bool tallMisfit = vertical && n > 1 && caret.top - g.gap - (H + e) < area.top &&
+                          caret.bottom + g.gap + (H + e) > area.bottom;
+  if (tallMisfit || placed.Width() < W + e || placed.Height() < H + e) {
+    const int belowRoom = area.bottom - (caret.bottom + g.gap) - e;  // client room per side
+    const int aboveRoom = (caret.top - g.gap) - area.top - e;
+    const int roomW = area.Width() - e;
+    const int rooms[2] = {preferAbove ? aboveRoom : belowRoom, preferAbove ? belowRoom : aboveRoom};
+    bool found = false;
+    for (int s = 0; s < 2 && !found; ++s) {
+      const int room = rooms[s];
+      for (int o = 0; o < 2 && !found; ++o) {
+        const bool v = o == 1;  // rows first: a single row is the familiar fallback for a tall list
+        int w = 0, h = 0;
+        std::vector<Rect> c = LayoutCells(widths, g.lineH, v, v ? big : roomW, v ? room : big,
+                                          g.padX, g.padY, g.gapX, &w, &h);
+        if (w <= roomW && h <= room) { *cells = c; W = w; H = h; vert = v; found = true; }
+      }
+    }
+    if (!found) {  // nothing fits: columns in the larger side, cells outside the client hidden below
+      vert = true;
+      *cells = LayoutCells(widths, g.lineH, true, big, aboveRoom > belowRoom ? aboveRoom : belowRoom,
+                           g.padX, g.padY, g.gapX, &W, &H);
+    }
+    placed = PlaceCandidate(caret, W + e, H + e, area, g.gap, vert && n >= 5, how);
+  }
+  const int cw = placed.Width() - e, ch = placed.Height() - e;
+  int shown = 0;
+  for (auto &c : *cells) {
+    // A row must be wholly visible. An item wider than the whole panel (only possible when it is
+    // wider than the work area, or column cells widened by it) is cut at the client edge, so it
+    // stays readable from its start and clickable; a cell that starts past the edge is hidden.
+    if (c.right > cw && c.left < cw - g.padX) c.right = cw;
+    if (c.left < 0 || c.top < 0 || c.right > cw || c.bottom > ch) c = Rect{0, 0, 0, 0};
+    else ++shown;
+  }
+  if (visible) *visible = shown;
+  if (vertOut) *vertOut = vert;
+  return placed;
+}
+
 }  // namespace kx
 #endif
