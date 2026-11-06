@@ -1372,6 +1372,19 @@ local function func(key, env)
     commit_text(env, string.char(key.keycode), true)
     return kAccepted
   end
+  -- Space follows the script of the text before it, mirroring punctuation:
+  -- after Latin/digit text (hello. / 60cm) it stays half-width under
+  -- full_shape; after CJK it falls through to the full-shape punctuator.
+  -- kinfx_digit_tail covers a bare digit run (60 + Space -> 60 , U+0020).
+  -- ascii_mode space is already half-width (Fix A owns the ASCII path), so
+  -- leave its handled flag untouched.
+  if r == kNoop and not key:release() and not (key:ctrl() or key:alt() or key:super())
+     and key.keycode == 0x20 and not ctx:is_composing() and not ctx:get_option("ascii_mode")
+     and (ctx:get_property("kinfx_punct_tail") == "latin"
+          or ctx:get_property("kinfx_digit_tail") == "1") then
+    commit_text(env, " ", true)
+    return kAccepted
+  end
   -- A leading slash starts an ASCII command (/init, /yolo): the command leader
   -- stays half-width under full_shape (the same ASCII-path contract as English
   -- after punctuation), and it sets the Latin tail so the command's trailing
