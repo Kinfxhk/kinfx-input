@@ -428,7 +428,47 @@ int main() {
     DeleteFileW(bp.c_str());
     put(bp, "{\n \"modifiers\": 0,\n \"virtual_key\": 0,\n \"language_hotkey\": 1\n}\n");
     kx::TakeOverHotkeys();  // an invalid existing backup is rewritten from live values, never trusted
-    Check("takeover rewrites a malformed backup", std::to_string(kx::RestoreHotkeys()) + "/" + state(), "1/" + before);
+    bool r3 = kx::RestoreHotkeys();  // sequenced: restore before observing state
+    std::string s3 = state();
+    Check("takeover rewrites a malformed backup", std::to_string(r3) + "/" + s3, "1/" + before);
+    DeleteFileW(bp.c_str());
+    DeleteFileW(cbp.c_str());
+    // Mac re-review 2 (46e9111) reproducers: partial values, duplicates of any type, truncation. Each
+    // alone must make restore return false, write nothing (state and 0x70 unchanged) and keep the file.
+    struct Bad { bool cht; const char *name, *body; };
+    const Bad bads[] = {
+        {true, "cht exponent 32e1", "{\"cht_modifiers\":2,\"cht_virtual_key\":32e1}"},
+        {true, "cht fraction 32.5", "{\"cht_modifiers\":2,\"cht_virtual_key\":32.5}"},
+        {true, "cht duplicate string", "{\"cht_modifiers\":2,\"cht_virtual_key\":32,\"cht_virtual_key\":\"broken\"}"},
+        {true, "cht truncated", "{\"cht_modifiers\":2,\"cht_virtual_key\":32\n"},
+        {false, "main duplicate overflow",
+         "{\"modifiers\":2,\"virtual_key\":32,\"language_hotkey\":2,\"layout_hotkey\":2,\"virtual_key\":99999999999}"},
+        {false, "main duplicate string",
+         "{\"modifiers\":2,\"virtual_key\":32,\"language_hotkey\":2,\"layout_hotkey\":2,\"modifiers\":\"broken\"}"},
+        {false, "main truncated", "{\"modifiers\":2,\"virtual_key\":32,\"language_hotkey\":2,\"layout_hotkey\":2\n"},
+    };
+    for (auto &b : bads) {
+      const std::wstring &p = b.cht ? cbp : bp;
+      put(p, b.body);
+      bool r = kx::RestoreHotkeys();
+      std::string s = state();
+      long v70 = reg(HK70, L"Virtual Key");
+      Check(std::string("malformed ") + b.name + ": fail closed",
+            std::to_string(r) + "/" + std::to_string(exists(p)) + "/" + s + "/" + std::to_string(v70),
+            "0/1/" + before + "/" + std::to_string(chtVk));
+      DeleteFileW(p.c_str());
+    }
+    // Compatibility: the exact files the writer produces (including "time") still restore.
+    put(bp, valid);
+    {
+      std::string withTime = std::string(valid);
+      withTime.insert(2, "\"time\": \"2026-11-07T00:00:00\",\n ");
+      put(bp, withTime.c_str());
+    }
+    bool rv = kx::RestoreHotkeys();
+    std::string sv = state();
+    Check("valid backup with time restores", std::to_string(rv) + "/" + std::to_string(exists(bp)) + "/" + sv,
+          "1/0/" + before);
     DeleteFileW(bp.c_str());
     DeleteFileW(cbp.c_str());
   }

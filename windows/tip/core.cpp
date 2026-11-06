@@ -187,37 +187,101 @@ static bool ChtSet(UINT mod, UINT vk) {
   return f && f(kChtToggle, mod, vk, nullptr);
 }
 
-static const std::regex kChtMod("\"cht_modifiers\"\\s*:\\s*([0-9]+)"), kChtVk("\"cht_virtual_key\"\\s*:\\s*([0-9]+)");
-
 // A backup is usable only when it reads back with the fields restore needs. Takeover clears a binding
 // only after that holds: a failed or truncated write must never leave the user's original unrecoverable
-// (Mac review 2026-11-06, P1).
-// Strict parse: each field present exactly once, at most 10 digits (no stoul overflow) and in range.
-// Anything else is "malformed" and fails closed (Mac re-review 2026-11-07, P2).
+// (Mac review 2026-11-06, P1). The whole file must be exactly one flat JSON object of the shape the
+// writer below produces: known keys only, each exactly once, integers with 1-10 digits and no
+// fraction/exponent, "time" a plain string, nothing after the closing brace. Anything else is
+// malformed and fails closed (Mac re-review 2026-11-07, P2).
+struct BackupField {
+  bool isString = false;
+  long long n = 0;
+};
+static bool ParseFlatJson(const std::string &t, const std::vector<std::string> &intKeys,
+                          const std::vector<std::string> &strKeys, std::map<std::string, BackupField> *out) {
+  size_t i = 0;
+  auto ws = [&] { while (i < t.size() && (t[i] == ' ' || t[i] == '\t' || t[i] == '\r' || t[i] == '\n')) ++i; };
+  auto str = [&](std::string *s) {
+    if (i >= t.size() || t[i] != '"') return false;
+    size_t j = ++i;
+    while (i < t.size() && t[i] != '"') {
+      unsigned char c = (unsigned char)t[i];
+      if (c == '\\' || c < 0x20) return false;  // the writer never escapes; refuse rather than guess
+      ++i;
+    }
+    if (i >= t.size()) return false;
+    *s = t.substr(j, i - j);
+    ++i;
+    return true;
+  };
+  auto has = [](const std::vector<std::string> &v, const std::string &k) {
+    for (auto &x : v) if (x == k) return true;
+    return false;
+  };
+  std::map<std::string, BackupField> m;
+  ws();
+  if (i >= t.size() || t[i++] != '{') return false;
+  ws();
+  if (i < t.size() && t[i] == '}') return false;  // empty object is never a backup
+  for (;;) {
+    std::string k;
+    ws();
+    if (!str(&k) || m.count(k)) return false;  // every duplicate is fatal, whatever its value
+    ws();
+    if (i >= t.size() || t[i++] != ':') return false;
+    ws();
+    BackupField fld;
+    if (has(strKeys, k)) {
+      std::string sv;
+      if (!str(&sv)) return false;
+      fld.isString = true;
+    } else if (has(intKeys, k)) {
+      bool neg = i < t.size() && t[i] == '-';
+      if (neg) ++i;
+      size_t j = i;
+      while (i < t.size() && t[i] >= '0' && t[i] <= '9') ++i;
+      size_t d = i - j;
+      if (d < 1 || d > 10 || (d > 1 && t[j] == '0')) return false;
+      if (i < t.size() && (t[i] == '.' || t[i] == 'e' || t[i] == 'E')) return false;
+      fld.n = std::stoll(t.substr(j, d));
+      if (neg) fld.n = -fld.n;
+    } else {
+      return false;  // unknown key
+    }
+    m[k] = fld;
+    ws();
+    if (i >= t.size()) return false;  // truncated
+    if (t[i] == ',') { ++i; continue; }
+    if (t[i] == '}') { ++i; break; }
+    return false;
+  }
+  ws();
+  if (i != t.size()) return false;  // trailing garbage
+  for (auto &k : intKeys) if (!m.count(k)) return false;
+  if (out) *out = m;
+  return true;
+}
 static bool ParseCht(const std::string &t, UINT *mod, UINT *vk) {
-  std::smatch a, b;
-  if (!std::regex_search(t, a, kChtMod) || !std::regex_search(t, b, kChtVk)) return false;
-  if (std::regex_search(a.suffix().first, t.end(), kChtMod) || std::regex_search(b.suffix().first, t.end(), kChtVk)) return false;
-  if (a[1].length() > 10 || b[1].length() > 10) return false;
-  unsigned long long m = std::stoull(a[1]), v = std::stoull(b[1]);
-  if (m > 0xFFFF || v < 1 || v > 0xFE) return false;  // a backup is only written for a set binding
-  *mod = (UINT)m; *vk = (UINT)v;
+  std::map<std::string, BackupField> m;
+  if (!ParseFlatJson(t, {"cht_modifiers", "cht_virtual_key"}, {}, &m)) return false;
+  long long mo = m["cht_modifiers"].n, v = m["cht_virtual_key"].n;
+  if (mo < 0 || mo > 0xFFFF || v < 1 || v > 0xFE) return false;  // a backup is only written for a set binding
+  *mod = (UINT)mo;
+  *vk = (UINT)v;
   return true;
 }
 static bool ParseHotkeys(const std::string &t, std::map<std::string, long> *out) {
-  static const std::regex num("\"([a-z_]+)\"\\s*:\\s*(-?[0-9]{1,10})\\s*[,}\\n]");
+  std::map<std::string, BackupField> m;
+  if (!ParseFlatJson(t, {"modifiers", "virtual_key", "language_hotkey", "layout_hotkey"}, {"time"}, &m)) return false;
   std::map<std::string, long> v;
-  for (std::sregex_iterator it(t.begin(), t.end(), num), end; it != end; ++it) {
-    long long n = std::stoll((*it)[2]);
-    if (n < -1 || n > 0xFFFF || v.count((*it)[1])) return false;  // -1 = value was absent
-    v[(*it)[1]] = (long)n;
+  for (auto k : {"modifiers", "virtual_key", "language_hotkey", "layout_hotkey"}) {
+    long long n = m[k].n;
+    if (n < -1 || n > 0xFFFF) return false;  // -1 = value was absent when backed up
+    v[k] = (long)n;
   }
-  for (auto k : {"modifiers", "virtual_key", "language_hotkey", "layout_hotkey"})
-    if (!v.count(k)) return false;
   if (out) *out = v;
   return true;
-}
-static bool ChtBackupValid(const std::wstring &path) {
+}static bool ChtBackupValid(const std::wstring &path) {
   UINT m, v;
   return ParseCht(ReadAll(path), &m, &v);
 }
