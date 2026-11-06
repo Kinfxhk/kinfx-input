@@ -326,6 +326,15 @@ class Interactions(unittest.TestCase):
         self.assertTrue(e.owns(h))
         return h, options
 
+    def _release_failed_latch(self, h):
+        # Restore engine state after a failed-latch assertion so the next test
+        # (or sub-test) starts clean: drop the idle reservation and marker,
+        # clear the failed latch, and let the next key create a fresh owner.
+        shell.ENGINE.retry_runtime.pop(h, None)
+        shell.ENGINE.app_fallback.pop(h, None)
+        shell.ENGINE.native_rebuild_failed = False
+        self.e.sess = 0
+
     def _assert_routing_revoked(self, h, options):
         e = shell.ENGINE
         self.assertIn(h, e.retry_runtime)
@@ -352,6 +361,69 @@ class Interactions(unittest.TestCase):
                 self._assert_routing_revoked(h, options)
                 if name == "secure":
                     self.e.secure = False
+
+    def test_shortcut_modifiers_and_release_never_mark_literal_fallback(self):
+        # Ctrl/Alt/Super-modified keys and key-release events are shortcuts or
+        # releases, never a literal app-side fallback (Ctrl+C inserts no 'c').
+        # They must not record an app_fallback marker during a failed-latched
+        # rebuild, so a later terminal action revokes the latin routing
+        # (full-width period) instead of keeping it (half-width period).
+        for keyval, state in [
+            (ord("c"), IBus.ModifierType.CONTROL_MASK),
+            (ord("c"), IBus.ModifierType.MOD1_MASK),
+            (ord("c"), IBus.ModifierType.SUPER_MASK),
+            (ord("c"), IBus.ModifierType.CONTROL_MASK | IBus.ModifierType.SHIFT_MASK),
+            (ord("c"), IBus.ModifierType.RELEASE_MASK),
+            (ord("2"), IBus.ModifierType.CONTROL_MASK),
+        ]:
+            with self.subTest(keyval=keyval, state=state):
+                h, _ = self._manufacture_failed_latch()
+                try:
+                    self.assertFalse(self.key(keyval, state))
+                    self.assertNotIn(h, shell.ENGINE.app_fallback,
+                                     "shortcut/release must not mark literal fallback")
+                finally:
+                    self._release_failed_latch(h)
+
+    def test_plain_ascii_still_marks_literal_fallback(self):
+        # The fallback2 contract (N3): a plain printable ASCII letter/digit —
+        # Shift allowed — the host inserts literally during a failed-latched
+        # rebuild must still record the marker (digit-led run flagged), so the
+        # tail stays half-width.
+        for keyval, state, digit in [
+            (ord("2"), 0, True),
+            (ord("a"), 0, False),
+            (ord("A"), IBus.ModifierType.SHIFT_MASK, False),
+        ]:
+            with self.subTest(keyval=keyval, state=state):
+                h, _ = self._manufacture_failed_latch()
+                try:
+                    self.assertFalse(self.key(keyval, state))
+                    self.assertIn(h, shell.ENGINE.app_fallback)
+                    self.assertEqual(shell.ENGINE.app_fallback[h], digit)
+                finally:
+                    self._release_failed_latch(h)
+
+    def test_shortcut_focus_out_revokes_but_digit_fallback_keeps_routing(self):
+        # End-to-end routing: Ctrl+C then focus-out revokes the latin routing
+        # (full-width period on retry), whereas a real digit fallback keeps it
+        # half-width and digit-led (N3 contract).
+        h, _ = self._manufacture_failed_latch()
+        try:
+            self.assertFalse(self.key(ord("c"), IBus.ModifierType.CONTROL_MASK))
+            self.e.do_focus_out()
+            self.assertEqual(shell.ENGINE.retry_runtime[h]["tail"], 0)
+        finally:
+            self._release_failed_latch(h)
+
+        h, _ = self._manufacture_failed_latch()
+        try:
+            self.assertFalse(self.key(ord("2")))
+            self.e.do_focus_out()
+            self.assertEqual(shell.ENGINE.retry_runtime[h]["tail"], 1)
+            self.assertEqual(shell.ENGINE.retry_runtime[h]["digit"], 1)
+        finally:
+            self._release_failed_latch(h)
 
 
 if __name__ == "__main__":

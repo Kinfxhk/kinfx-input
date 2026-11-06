@@ -14,6 +14,13 @@ import kxcore  # noqa: E402
 MASK = (IBus.ModifierType.SHIFT_MASK | IBus.ModifierType.LOCK_MASK | IBus.ModifierType.CONTROL_MASK
         | IBus.ModifierType.MOD1_MASK | IBus.ModifierType.SUPER_MASK | IBus.ModifierType.RELEASE_MASK)
 
+# A key carrying any of these modifier bits (or a key-release event) is a
+# shortcut / modifier gesture, never a literal app-side fallback the host
+# inserts as text (Ctrl+C inserts no 'c'). Such keys must not create the
+# app_fallback marker that keeps a failed owner's routing tail half-width.
+NOT_LITERAL = (IBus.ModifierType.CONTROL_MASK | IBus.ModifierType.MOD1_MASK
+               | IBus.ModifierType.SUPER_MASK | IBus.ModifierType.RELEASE_MASK)
+
 ENGINE = kxcore.Engine()
 
 # Bare Ctrl+Shift / Alt+Shift are chords, like the Windows shell: Windows/IBus would otherwise
@@ -90,7 +97,9 @@ class KxEngine(IBus.Engine):
             # unhandled printable ASCII key literally (fallback2 contract). Record it
             # so a later clear/blur of this failed owner keeps its latin/digit tail
             # instead of revoking it (mirrors mac InputController noteAppFallback).
-            is_digit = _printable_ascii(keyval)
+            # Shortcuts (Ctrl/Alt/Super) and key releases are never literal fallback
+            # (e.g. Ctrl+C inserts no 'c'), so they must not create the marker.
+            is_digit = None if state & NOT_LITERAL else _printable_ascii(keyval)
             if is_digit is not None and self.sess:
                 ENGINE.note_app_fallback(self.sess, is_digit)
             return False
@@ -171,9 +180,7 @@ class KxEngine(IBus.Engine):
 
     def do_candidate_clicked(self, index, button, state):
         # Only a primary-button selection; unrelated clicks must not type a digit.
-        shortcut = (IBus.ModifierType.CONTROL_MASK | IBus.ModifierType.MOD1_MASK
-                    | IBus.ModifierType.SUPER_MASK | IBus.ModifierType.RELEASE_MASK)
-        if self.secure or button != 1 or state & shortcut:
+        if self.secure or button != 1 or state & NOT_LITERAL:
             return
         if not ENGINE.alive(self.sess):
             return
