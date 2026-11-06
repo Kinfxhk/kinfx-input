@@ -679,7 +679,11 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
       pending_ = true; pendW_ = w; pendUp_ = up; pendEaten_ = eaten;
     } else if (sym && (paste || !(mask & (kControl | kAlt))) && Session() && (!up || modKey)) {
       int m = modKey ? mask & ~kShift : mask;  // Rime gets the Shift key itself, not Shift as a modifier
+      // 全形/半形 is held user-wide: another app's Shift+Space, or this app's new session (the
+      // schema resets full_shape), must not flip it back. Apply before the key, publish after.
+      if (kx::ApplyShape(sess_)) Trace("shape applied");
       eaten = kx_key(sess_, sym, m | (up ? kRelease : 0)) != 0;
+      if (kx::NoteShape(sess_)) Trace("shape held");
       Trace("key sym=" + std::to_string(sym) + " m=" + std::to_string(m) + (up ? " up" : "") + " eaten=" + (eaten ? "1" : "0"));
       pending_ = true; pendW_ = w; pendUp_ = up; pendEaten_ = eaten;
     }

@@ -27,6 +27,11 @@ bool ReloadIfChanged();
 const Settings &Current();
 bool AsciiMode(uintptr_t sess);  // Rime's ascii_mode option (the 中/英 hint reads it)
 
+// 全形/半形 held user-wide across apps and new sessions (the schema resets it per session).
+int ShapeWanted();               // 1 full, 0 half, -1 not chosen yet
+bool ApplyShape(uintptr_t sess);  // set the session to the held choice; true if it changed
+bool NoteShape(uintptr_t sess);   // after a key: publish a Shift+Space change; true if it changed
+
 // Turns off Windows' own Ctrl+Space / Ctrl+Shift / Alt+Shift bindings (backed up once to
 // hotkeys-backup.json) so the key sink receives them; RestoreHotkeys undoes it on uninstall.
 void TakeOverHotkeys();

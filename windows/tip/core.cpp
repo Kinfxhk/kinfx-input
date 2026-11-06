@@ -273,6 +273,61 @@ bool AsciiMode(uintptr_t sess) {
   return api && api->get_option && api->get_option((RimeSessionId)sess, "ascii_mode") != 0;
 }
 
+// 全形/半形 is one user-wide choice, as in Windows Quick: Shift+Space in one app holds in every app
+// and after switching back. The shared schema resets full_shape in each new Rime session (and every
+// app hosts its own engine), so the shell keeps the choice: a named LONG for the running logon
+// (1 = full, 2 = half, 0 = not loaded yet) plus HKCU\Software\KINFX Input\FullShape for the next one.
+// An AppContainer app cannot open either; it simply keeps the schema default.
+static const wchar_t *kShapeKey = L"Software\\KINFX Input";
+// The self-test (KX_USER set) gets a private cell and no registry, so it never flips the user's choice.
+static bool ShapeTest() { return GetEnvironmentVariableW(L"KX_USER", nullptr, 0) != 0; }
+static volatile LONG *ShapeCell() {
+  static volatile LONG *cell = []() -> volatile LONG * {
+    std::wstring name = ShapeTest() ? L"Local\\KINFXInputShapeTest" + std::to_wstring(GetCurrentProcessId()) : L"Local\\KINFXInputShape";
+    HANDLE m = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, sizeof(LONG), name.c_str());
+    if (!m) return nullptr;  // the handle stays open for the life of the process
+    return (volatile LONG *)MapViewOfFile(m, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(LONG));
+  }();
+  return cell;
+}
+
+int ShapeWanted() {
+  volatile LONG *c = ShapeCell();
+  LONG v = c ? *c : 0;
+  if (v != 1 && v != 2 && !ShapeTest()) {
+    long r = RegGet(kShapeKey, L"FullShape");
+    v = r == 1 ? 1 : r == 0 ? 2 : 0;
+    if (c && v) InterlockedCompareExchange(c, v, 0);
+  }
+  return v == 1 ? 1 : v == 2 ? 0 : -1;
+}
+
+static RimeApi *Api() {
+  static RimeApi *api = rime_get_api();
+  return api;
+}
+
+bool ApplyShape(uintptr_t sess) {
+  RimeApi *api = Api();
+  int want = ShapeWanted();
+  if (!sess || want < 0 || !api || !api->get_option || !api->set_option) return false;
+  bool full = api->get_option((RimeSessionId)sess, "full_shape") != 0;
+  if (full == (want == 1)) return false;
+  api->set_option((RimeSessionId)sess, "full_shape", want == 1);
+  return true;
+}
+
+bool NoteShape(uintptr_t sess) {
+  RimeApi *api = Api();
+  if (!sess || !api || !api->get_option) return false;
+  bool full = api->get_option((RimeSessionId)sess, "full_shape") != 0;
+  int want = ShapeWanted();
+  if (want == (full ? 1 : 0)) return false;
+  if (volatile LONG *c = ShapeCell()) InterlockedExchange(c, full ? 1 : 2);
+  if (!ShapeTest()) RegSet(kShapeKey, L"FullShape", full ? 1 : 0);
+  return true;
+}
+
 bool ReloadIfChanged() {
   if (!g_started) return false;
   TakeOverHotkeys();  // idempotent; also repairs a binding something put back

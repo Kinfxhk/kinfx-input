@@ -157,6 +157,33 @@ int main() {
     for (const char *k : {"v", "d", "1", ","}) { kx_key(s, *k, 0); shape += Take(s); }
     Check("half shape, then full again", shape, ",/-*\xe5\xa5\xbd\xef\xbc\x8c");
     kx_destroy(s);
+    // 全形/半形 held user-wide (the TSF key path runs ApplyShape before and NoteShape after each
+    // key): Shift+Space in app A, then a fresh session (app B, or A after switching back) stays half.
+    {
+      Check("shape: nothing chosen yet", std::to_string(kx::ShapeWanted()), "-1");
+      uintptr_t a = kx_session("kinfx_quick");
+      kx::ApplyShape(a);
+      kx_key(a, 0x20, 1);  // Shift+Space: full -> half
+      kx::NoteShape(a);
+      Check("shape: Shift+Space held as half", std::to_string(kx::ShapeWanted()), "0");
+      uintptr_t b = kx_session("kinfx_quick");  // new app: schema resets to full
+      kx::ApplyShape(b);
+      std::string got;
+      for (const char *k : {"v", "d", "1", " ", ","}) { kx_key(b, *k == ' ' ? 0x20 : *k, 0); got += Take(b); kx::NoteShape(b); }
+      Check("shape: other app keeps half (space U+0020)", got, "\xe5\xa5\xbd ,");
+      kx::ApplyShape(a);  // back to app A
+      got.clear();
+      for (const char *k : {"v", "d", "1", " "}) { kx_key(a, *k == ' ' ? 0x20 : *k, 0); got += Take(a); }
+      Check("shape: switching back keeps half", got, "\xe5\xa5\xbd ");
+      kx_key(b, 0x20, 1);  // Shift+Space in B: half -> full
+      kx::NoteShape(b);
+      kx::ApplyShape(a);
+      got.clear();
+      for (const char *k : {"v", "d", "1", " "}) { kx_key(a, *k == ' ' ? 0x20 : *k, 0); got += Take(a); }
+      Check("shape: full chosen in B reaches A (U+3000)", got, "\xe5\xa5\xbd\xe3\x80\x80");
+      kx_destroy(a);
+      kx_destroy(b);
+    }
     // Handoff contract vectors the shared engine owns. Reported as GAP until the shared fix lands.
     auto run = [&](std::initializer_list<const char *> keys) {
       uintptr_t g = kx_session("kinfx_quick");
