@@ -8,6 +8,8 @@
 #include <vector>
 #include "chord.h"
 #include "core.h"
+#include "display-caret.h"
+#include "caret-origin.h"
 #include "langbar.h"
 
 HINSTANCE g_hinst;
@@ -102,7 +104,9 @@ static int KeySym(WPARAM vk, LPARAM lp) {
 // ---------- candidate window ----------
 class CandWin {
  public:
-  void Show(const std::vector<std::wstring> &items, POINT at, int lineAbove, bool vertical) {
+  void Show(const std::vector<std::wstring> &items, POINT at, int lineAbove, bool vertical,
+            std::function<void(int)> pick = {}) {
+    pick_ = std::move(pick); pressed_ = -1;
     if (!hwnd_) Create();
     hintOn_ = false;  // a real candidate list takes the window back from the mode hint
     KillTimer(hwnd_, 1);  // ... and the hint's 400 ms timer must not hide the list later
@@ -117,23 +121,40 @@ class CandWin {
       dpi_ = dpi;
       font_ = CreateFontW(-S(kFontPx), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Microsoft JhengHei UI");
     }
-    HDC dc = GetDC(hwnd_);
-    HGDIOBJ old = SelectObject(dc, font_);
-    int w = 0, h = 0;
-    for (auto &s : items_) {
-      SIZE sz;
-      GetTextExtentPoint32W(dc, s.c_str(), (int)s.size(), &sz);
-      lineH_ = sz.cy + S(8);
-      if (vertical_) { w = max(w, (int)sz.cx); h += lineH_; }
-      else { w += sz.cx + S(20); h = lineH_; }
-    }
-    SelectObject(dc, old);
-    ReleaseDC(hwnd_, dc);
-    int ww = w + S(28), wh = h + S(12);
+    int ww = 0, wh = 0;
+    auto measure = [&] {
+      HDC dc = GetDC(hwnd_);
+      HGDIOBJ old = SelectObject(dc, font_);
+      int w = 0, h = 0;
+      for (auto &s : items_) {
+        SIZE sz;
+        GetTextExtentPoint32W(dc, s.c_str(), (int)s.size(), &sz);
+        lineH_ = sz.cy + S(8);
+        if (vertical_) { w = max(w, (int)sz.cx); h += lineH_; }
+        else { w += sz.cx + S(20); h = lineH_; }
+      }
+      SelectObject(dc, old);
+      ReleaseDC(hwnd_, dc);
+      ww = w + S(28); wh = h + S(12);
+    };
+    measure();
     MONITORINFO mi = {sizeof mi};
     if (GetMonitorInfoW(MonitorFromPoint(at, MONITOR_DEFAULTTONEAREST), &mi)) {
       RECT wa = mi.rcWork;
-      if (at.y + wh > wa.bottom) at.y = max(wa.top, at.y - lineAbove - 4 - wh);  // no room below: above the text line
+      // A tall vertical list hanging below the caret covers the next input of Qt/Electron forms,
+      // whose fields are not separate windows, and a click meant for that field picks a candidate
+      // instead (x46: "vd" + click lower field -> upper field "妹好", lower field never focused).
+      // Prefer the space above the text line when the whole list fits there. When it fits neither
+      // above nor below, the list used to be pushed to the top edge, over the text line and
+      // whatever lies under it. In that case, and when only the space below is free, show a single
+      // row under the caret instead of a tall column; mouse selection stays the same.
+      if (vertical_ && items_.size() > 1 && at.y - lineAbove - 4 - wh < wa.top) {
+        vertical_ = false;
+        measure();
+      }
+      const int above = at.y - lineAbove - 4 - wh;  // bottom edge just over the text line
+      if (vertical_ && items_.size() > 1 && above >= wa.top) at.y = above;
+      if (at.y + wh > wa.bottom) at.y = max(wa.top, above);  // no room below: above the text line
       if (at.x + ww > wa.right) at.x = max(wa.left, wa.right - ww);
       if (at.x < wa.left) at.x = wa.left;
     }
@@ -149,6 +170,7 @@ class CandWin {
   }
   void Hide(bool force = false) {
     if (!hwnd_ || (hintOn_ && !force)) return;  // focus loss also cancels a mode hint
+    pick_ = {}; pressed_ = -1;
     if (force) { hintOn_ = false; KillTimer(hwnd_, 1); items_.clear(); }
     KillTimer(hwnd_, 2);
     ShowWindow(hwnd_, SW_HIDE);
@@ -162,12 +184,27 @@ class CandWin {
     if (hwnd_) SetTimer(hwnd_, 1, 400, nullptr);
   }
   void Destroy() {
+    pick_ = {}; pressed_ = -1;
     if (hwnd_) { KillTimer(hwnd_, 1); KillTimer(hwnd_, 2); DestroyWindow(hwnd_); }
     hwnd_ = nullptr;
     if (font_) DeleteObject(font_); font_ = nullptr;
   }
 
  private:
+  int HitItem(POINT pt) {
+    if (hintOn_ || !pick_ || !IsWindowVisible(hwnd_) || !ScreenToClient(hwnd_, &pt)) return -1;
+    RECT rc; GetClientRect(hwnd_, &rc);
+    if (pt.x < S(14) || pt.x >= rc.right - S(14) || pt.y < S(6)) return -1;
+    int x = S(14), y = S(6), found = -1;
+    HDC dc = GetDC(hwnd_); HGDIOBJ old = SelectObject(dc, font_);
+    for (size_t i = 0; i < items_.size(); ++i) {
+      SIZE sz; GetTextExtentPoint32W(dc, items_[i].c_str(), (int)items_[i].size(), &sz);
+      const int width = vertical_ ? rc.right - S(28) : sz.cx + S(20);
+      if (pt.x >= x && pt.x < x + width && pt.y >= y && pt.y < y + lineH_) { found = (int)i; break; }
+      if (vertical_) y += lineH_; else x += width;
+    }
+    SelectObject(dc, old); ReleaseDC(hwnd_, dc); return found;
+  }
   void Create() {
     static bool reg = false;
     if (!reg) {
@@ -184,8 +221,24 @@ class CandWin {
     SetWindowLongPtrW(hwnd_, GWLP_USERDATA, (LONG_PTR)this);
   }
   static LRESULT CALLBACK Proc(HWND h, UINT m, WPARAM w, LPARAM l) {
-    if (m == WM_NCHITTEST) return HTTRANSPARENT;  // keyboard-only panel must not intercept clicks on another field
+    auto *self = (CandWin *)GetWindowLongPtrW(h, GWLP_USERDATA);
+    if (m == WM_NCHITTEST) {
+      POINT pt = {(short)LOWORD(l), (short)HIWORD(l)};
+      return self && self->HitItem(pt) >= 0 ? HTCLIENT : HTTRANSPARENT;
+    }
     if (m == WM_MOUSEACTIVATE) return MA_NOACTIVATE;
+    if (m == WM_LBUTTONDOWN) {
+      POINT pt; GetCursorPos(&pt); if (self) self->pressed_ = self->HitItem(pt); return 0;
+    }
+    if (m == WM_LBUTTONUP) {
+      POINT pt; GetCursorPos(&pt);
+      if (self) {
+        int item = self->HitItem(pt), pressed = self->pressed_; self->pressed_ = -1;
+        auto pick = self->pick_;  // callback may replace/destroy the window; no self access afterwards
+        if (item >= 0 && item == pressed && pick) pick(item);
+      }
+      return 0;
+    }
     if (m == WM_TIMER) {
       auto *self = (CandWin *)GetWindowLongPtrW(h, GWLP_USERDATA);
       if (w == 1) {
@@ -237,6 +290,8 @@ class CandWin {
   HWND hwnd_ = nullptr;
   HFONT font_ = nullptr;
   std::vector<std::wstring> items_;
+  std::function<void(int)> pick_;
+  int pressed_ = -1;
   bool vertical_ = true;
   bool hintOn_ = false;  // the window is showing 中/英 and must survive the next Hide()
   HWND fgRoot_ = nullptr;  // foreground root the list was shown for (timer 2 hides when it changes)
@@ -387,7 +442,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   STDMETHODIMP OnInitDocumentMgr(ITfDocumentMgr *) override { return S_OK; }
   STDMETHODIMP OnUninitDocumentMgr(ITfDocumentMgr *doc) override {
     ITfDocumentMgr *owner = nullptr;
-    if (focus_ && SUCCEEDED(focus_->GetDocumentMgr(&owner))) {
+    if (focus_ && SUCCEEDED(focus_->GetDocumentMgr(&owner)) && owner) {
       if (Same(doc, owner)) { Blur(); TrackContext(nullptr); }
       owner->Release();
     }
@@ -395,7 +450,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   }
   STDMETHODIMP OnSetFocus(ITfDocumentMgr *doc, ITfDocumentMgr *) override {
     ITfContext *c = nullptr;
-    if (doc) doc->GetTop(&c);
+    if (doc && FAILED(doc->GetTop(&c))) c = nullptr;
     EnsureContext(c);
     if (c) c->Release();
     return S_OK;
@@ -423,7 +478,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     if (SUCCEEDED(c->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &sel, &count)) && count == 1 && sel.range) {
       LONG start = 0, end = 0;
       if (generation == generation_ && Same(composition.get(), comp_) &&
-          SUCCEEDED(composition->GetRange(&range))) {
+          SUCCEEDED(composition->GetRange(&range)) && range) {
         bool outside = FAILED(range->CompareStart(ec, sel.range, TF_ANCHOR_START, &start)) ||
                        FAILED(range->CompareEnd(ec, sel.range, TF_ANCHOR_END, &end)) || start > 0 || end < 0;
         range->Release();
@@ -481,7 +536,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     auto finish = [this, composition, context, commit, terminated, generation](TfEditCookie cookie) {
       if (generation != generation_) return;
       ITfRange *range = nullptr;
-      if (!commit.empty() && SUCCEEDED(composition->GetRange(&range))) {
+      if (!commit.empty() && SUCCEEDED(composition->GetRange(&range)) && range) {
         if (generation == generation_)
           range->SetText(cookie, 0, commit.c_str(), (LONG)commit.size());
         range->Release();
@@ -523,7 +578,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     const auto generation = generation_;
     ITfContextView *view = nullptr;
     HWND hwnd = GetFocus(), viewHwnd = nullptr;
-    if (c && SUCCEEDED(c->GetActiveView(&view))) view->GetWnd(&viewHwnd);
+    if (c && SUCCEEDED(c->GetActiveView(&view)) && view) view->GetWnd(&viewHwnd);
     if (generation_ != generation) { if (view) view->Release(); return; }
     bool changed = !Same(c, focus_) || (focusHwnd_ && hwnd && focusHwnd_ != hwnd) ||
                    (viewHwnd_ && viewHwnd && viewHwnd_ != viewHwnd) ||
@@ -544,7 +599,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     ITfDocumentMgr *doc = nullptr;
     ITfContext *c = nullptr;
     if (tm_ && SUCCEEDED(tm_->GetFocus(&doc)) && doc) {
-      doc->GetTop(&c);
+      if (FAILED(doc->GetTop(&c))) c = nullptr;
       doc->Release();
     }
     EnsureContext(c);
@@ -575,6 +630,13 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
       if (same) return pendEaten_;
     }
     int sym = KeySym(w, l), mask = Mask();
+    // Tab/Shift+Tab belong to the host, not Rime's candidate navigation. Finish
+    // pending text with the existing raw blur policy before focus can move;
+    // returning false in OnTestKeyDown means OnKeyDown need not be dispatched.
+    if (sym == 0xff09 && !(mask & (kControl | kAlt))) {
+      if (!up) Blur();
+      return false;
+    }
     bool modKey = sym >= 0xffe1 && sym <= 0xffe2;
     // Shortcuts with Ctrl/Alt go to the app; Shift taps reach Rime (english_mix).
     // Ctrl+V while a preedit shows goes to Rime first (0.1.2): held top-outs commit, letters drop, app pastes.
@@ -609,7 +671,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     if (!Session()) return false;
     bool pre = comp_ != nullptr, list = cands_;
     if (pre) kx_key(sess_, 0xff0d, 0);
-    if (pre || list) kx_key(sess_, 0xff1b, 0);
+    // Preserve shared association/inline state: a synthetic Escape disables v8 held ASCII.
     bool eaten = kx_key(sess_, 0x20, kControl) != 0;
     hint_ = true;  // 中 / 英 for 400 ms: the user cannot see the mode anywhere else
     Trace(std::string("toggle ascii preedit=") + (pre ? "1" : "0") + " list=" + (list ? "1" : "0") + " eaten=" + (eaten ? "1" : "0"));
@@ -641,10 +703,10 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   // conversion-mode compartment; with it unset Windows keeps the profile icon (the K tile).
   void SetConversion(bool ascii) {
     if (!tm_) return;
-    ITfCompartmentMgr *cm;
-    ITfCompartment *c;
-    if (FAILED(tm_->QueryInterface(IID_ITfCompartmentMgr, (void **)&cm))) return;
-    if (SUCCEEDED(cm->GetCompartment(GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION, &c))) {
+    ITfCompartmentMgr *cm = nullptr;
+    ITfCompartment *c = nullptr;
+    if (FAILED(tm_->QueryInterface(IID_ITfCompartmentMgr, (void **)&cm)) || !cm) return;
+    if (SUCCEEDED(cm->GetCompartment(GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION, &c)) && c) {
       VARIANT v;
       VariantInit(&v);
       if (SUCCEEDED(c->GetValue(&v))) {
@@ -721,6 +783,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     for (size_t q; (q = ctx.find('\x1f', p)) != std::string::npos; p = q + 1) f.push_back(ctx.substr(p, q - p));
     f.push_back(ctx.substr(p));
     std::wstring pre = f.empty() ? L"" : kx::Wide(f[0]);
+    const LONG preCaret = f.size() > 1 ? kx::DisplayCaretUtf16(f[0], f[1]) : (LONG)pre.size();
     std::vector<std::wstring> cands;
     for (size_t i = 6; i < f.size(); i++) {
       std::string t = f[i], cm;
@@ -736,7 +799,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     auto *es = new EditSession([&](TfEditCookie ec) {
       if (generation != generation_ || !Same(c, focus_)) return;
       ++writing_;
-      Write(ec, c, commit, pre, &at, &lineH, generation);
+      Write(ec, c, commit, pre, preCaret, &at, &lineH, generation);
       --writing_;
     });
     HRESULT hr = E_FAIL;
@@ -748,11 +811,26 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     if (at.x < 0 && last_.x >= 0) { at = last_; lineH = lastH_; }  // TSF gave no extent: stay where the preedit was
     if (at.x < 0) at = CaretAt(&lineH);
     auto it = kx::Current().find("candidate_layout");
-    cand_.Show(cands, at, lineH, it == kx::Current().end() || it->second != "horizontal");
+    c->AddRef(); auto context = Adopt(c);
+    HWND hwnd = GetFocus();
+    cand_.Show(cands, at, lineH, it == kx::Current().end() || it->second != "horizontal",
+               [this, context, generation, hwnd, ctx](int item) { PickCandidate(context.get(), generation, hwnd, ctx, item); });
+  }
+
+  void PickCandidate(ITfContext *c, unsigned long long generation, HWND hwnd, const std::string &menu, int item) {
+    AddRef(); auto lifetime = Adopt(this);
+    if (!sess_ || item < 0 || item >= 9 || generation != generation_ || GetFocus() != hwnd || !Same(c, focus_)) return;
+    EnsureContext(c);
+    if (generation != generation_ || GetFocus() != hwnd || !Same(c, focus_)) return;
+    char *raw = kx_context(sess_); std::string current = raw ? raw : ""; free(raw);
+    if (menu != current) return;  // page, highlight and preedit must still be the displayed snapshot
+    pending_ = false; chord_ = KxChord();
+    kx_select_candidate_on_current_page(sess_, item);  // explicit mouse selection, not Shift+9 punctuation policy
+    Update(c);
   }
 
   // Commit text and/or preedit through one TSF composition.
-  void Write(TfEditCookie ec, ITfContext *c, const std::wstring &commit, const std::wstring &pre, POINT *at, int *lineH,
+  void Write(TfEditCookie ec, ITfContext *c, const std::wstring &commit, const std::wstring &pre, LONG preCaret, POINT *at, int *lineH,
              unsigned long long generation) {
     if (generation != generation_ || !Same(c, focus_) || (comp_ && !Same(c, owner_))) return;
     if (!commit.empty()) {
@@ -761,8 +839,8 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
       if (comp_) {
         comp_->AddRef();
         auto composition = Adopt(comp_);
-        ITfRange *r;
-        if (SUCCEEDED(composition->GetRange(&r))) {
+        ITfRange *r = nullptr;
+        if (SUCCEEDED(composition->GetRange(&r)) && r) {
           r->SetText(ec, 0, commit.c_str(), (LONG)commit.size());
           if (generation != generation_ || !Same(composition.get(), comp_)) { r->Release(); return; }
           r->Collapse(ec, TF_ANCHOR_END);
@@ -778,8 +856,8 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
       if (comp_) {
         comp_->AddRef();
         auto composition = Adopt(comp_);
-        ITfRange *r;
-        if (SUCCEEDED(composition->GetRange(&r))) { r->SetText(ec, 0, L"", 0); r->Release(); }
+        ITfRange *r = nullptr;
+        if (SUCCEEDED(composition->GetRange(&r)) && r) { r->SetText(ec, 0, L"", 0); r->Release(); }
         if (generation != generation_ || !Same(composition.get(), comp_)) return;
         End(ec);
       }
@@ -796,39 +874,74 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     if (!comp_ || generation != generation_ || !Same(c, owner_)) return;
     comp_->AddRef();
     auto composition = Adopt(comp_);
-    ITfRange *r;
-    if (FAILED(composition->GetRange(&r))) return;
+    ITfRange *r = nullptr;
+    if (FAILED(composition->GetRange(&r)) || !r) return;
     r->SetText(ec, 0, pre.c_str(), (LONG)pre.size());
     if (generation != generation_ || !Same(composition.get(), comp_)) { r->Release(); return; }
-    ITfRange *end;
-    if (SUCCEEDED(r->Clone(&end))) { end->Collapse(ec, TF_ANCHOR_END); SetSel(ec, c, end); end->Release(); }
-    if (generation == generation_ && Same(c, focus_)) Below(ec, c, r, at, lineH);
+    ITfRange *caret = nullptr;
+    if (SUCCEEDED(r->Clone(&caret)) && caret) {
+      LONG shifted = 0;
+      if (SUCCEEDED(caret->Collapse(ec, TF_ANCHOR_START)) &&
+          SUCCEEDED(caret->ShiftEnd(ec, preCaret, &shifted, nullptr)) && shifted == preCaret &&
+          generation == generation_ && Same(c, owner_)) {
+        caret->Collapse(ec, TF_ANCHOR_END); SetSel(ec, c, caret);
+        if (generation == generation_ && Same(c, focus_)) Below(ec, c, caret, at, lineH);
+      }
+      caret->Release();
+    }
     r->Release();
   }
 
   // Screen point just below a text range, from the app's TSF view.
   void Below(TfEditCookie ec, ITfContext *c, ITfRange *r, POINT *at, int *lineH) {
     const auto generation = generation_;
-    ITfContextView *v;
-    if (FAILED(c->GetActiveView(&v))) return;
-    RECT rc;
-    BOOL clipped;
-    if (SUCCEEDED(v->GetTextExt(ec, r, &rc, &clipped)) && (rc.left || rc.bottom) &&
-        generation == generation_ && Same(c, focus_)) {
-      at->x = rc.left; at->y = rc.bottom + 2;
-      *lineH = rc.bottom - rc.top;
-      last_ = *at; lastH_ = *lineH;
+    ITfContextView *v = nullptr;
+    if (FAILED(c->GetActiveView(&v)) || !v) return;
+    // Full preedit bounds can start far left of the caret in a scrolled input.
+    // Query a collapsed clone, leaving the live composition range unchanged.
+    ITfRange *caret = nullptr;
+    if (generation == generation_ && Same(c, focus_) && SUCCEEDED(r->Clone(&caret)) && caret) {
+      RECT rc;
+      BOOL clipped;
+      if (SUCCEEDED(caret->Collapse(ec, TF_ANCHOR_END)) && generation == generation_ &&
+          Same(c, focus_) && SUCCEEDED(v->GetTextExt(ec, caret, &rc, &clipped)) &&
+          (rc.left || rc.bottom) && generation == generation_ && Same(c, focus_)) {
+        at->x = rc.left; at->y = rc.bottom + 2;
+        *lineH = rc.bottom - rc.top;
+        // Native EDIT can return a successful but left-wrapped TSF extent after horizontal scroll.
+        // Never substitute a browser/system caret or a caret belonging to another context/view.
+        HWND fw = GetFocus(), viewWindow = nullptr;
+        GUITHREADINFO gi = {sizeof gi};
+        wchar_t cls[128] = {};
+        if (fw && SUCCEEDED(v->GetWnd(&viewWindow)) &&
+            GetGUIThreadInfo(GetCurrentThreadId(), &gi) && GetClassNameW(fw, cls, 128)) {
+          RECT client = {};
+          POINT cp = {gi.rcCaret.left, gi.rcCaret.bottom};
+          const bool editHost = _wcsicmp(cls, L"Edit") == 0 || wcsncmp(cls, L"WindowsForms10.EDIT.", 20) == 0;
+          const bool valid = GetClientRect(fw, &client) && gi.rcCaret.bottom > gi.rcCaret.top &&
+              gi.rcCaret.left >= client.left && gi.rcCaret.right <= client.right &&
+              gi.rcCaret.top >= client.top && gi.rcCaret.bottom <= client.bottom && ClientToScreen(fw, &cp);
+          if (kx::PreferEditCaret(editHost, gi.hwndFocus == fw, gi.hwndCaret == fw, viewWindow == fw,
+                                  valid, rc.left, cp.x, 48) && generation == generation_ && Same(c, focus_)) {
+            at->x = cp.x; at->y = cp.y + 2;
+            *lineH = gi.rcCaret.bottom - gi.rcCaret.top;
+          }
+        }
+        if (generation != generation_ || !Same(c, focus_)) { caret->Release(); v->Release(); return; }
+        last_ = *at; lastH_ = *lineH;
+      }
+      caret->Release();
     }
     v->Release();
   }
 
   void Begin(TfEditCookie ec, ITfContext *c) {
     const auto generation = generation_;
-    ITfInsertAtSelection *ins;
-    ITfContextComposition *cc;
+    ITfInsertAtSelection *ins = nullptr;
+    ITfContextComposition *cc = nullptr;
     if (FAILED(c->QueryInterface(IID_ITfInsertAtSelection, (void **)&ins))) return;
     ITfRange *r = nullptr;
-    if (SUCCEEDED(ins->InsertTextAtSelection(ec, TF_IAS_QUERYONLY, nullptr, 0, &r)) &&
+    if (SUCCEEDED(ins->InsertTextAtSelection(ec, TF_IAS_QUERYONLY, nullptr, 0, &r)) && r &&
         SUCCEEDED(c->QueryInterface(IID_ITfContextComposition, (void **)&cc))) {
       ITfComposition *composition = nullptr;
       cc->StartComposition(ec, r, (ITfCompositionSink *)this, &composition);
