@@ -108,5 +108,19 @@ if _lc.stderr:
     print(_lc.stderr, end="")
 check("lifecycle regression suite", _lc.returncode, 0)
 
+# Full_shape global persistence + bidirectional broadcast + negative controls.
+# Same child-interpreter pattern (per-process shim singleton): a non-zero exit
+# means one of the broadcast / destroy / reload / fail-closed / no-persist
+# scenarios failed.
+_fs = _sp.run(
+    [sys.executable, os.path.join(_lc_lib, "test-fullshape-global.py")],
+    env=dict(os.environ, KX_SHARE=kxcore.SHARE, KX_LIB=_lc_lib),
+    capture_output=True, text=True)
+if _fs.stdout:
+    print(_fs.stdout, end="")
+if _fs.stderr:
+    print(_fs.stderr, end="")
+check("full_shape global regression suite", _fs.returncode, 0)
+
 print("ALL PASS" if not fails else "%d FAIL" % fails)
 sys.exit(1 if fails else 0)

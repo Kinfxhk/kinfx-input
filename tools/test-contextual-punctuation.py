@@ -45,6 +45,10 @@ def cases():
     yield 'english-chinese', keys('hello vd1,.'), {'half': 'hello 好,.', 'full': 'hello 好，。'}
     yield 'chinese-repeated', keys('vd1,.'), {'half': '好,.', 'full': '好，。'}
     yield 'chinese-unpicked', keys('vd,.'), {'half': '好,.', 'full': '好，。'}
+    # CJK commit sets tail='other'; a following slash must follow full_shape
+    # (好／), never the leading-ASCII-command branch (好/).
+    yield 'chinese-slash', keys('vd1/'), {'half': '好/', 'full': '好／'}
+    yield 'chinese-double-slash', keys('vd1//'), {'half': '好//', 'full': '好／／'}
     yield 'contraction', keys("don't "), "don't "
     yield 'two-code-digit', keys('gg1'), '圭'
     yield 'two-code-pages', keys('ez '), ''

@@ -122,6 +122,16 @@ class Engine:
         self.retry_runtime = {}   # logical handle -> idle snapshot kept across a failed redeploy
         self.native_rebuild_failed = False
         self.reload_pending = False
+        # Authoritative global full_shape. librime's Shift+Space toggle is a
+        # per-context option, so the width would otherwise be lost on any
+        # window/app switch. The engine keeps the global width here, restores it
+        # on every new owner at creation and broadcasts it to every live owner
+        # after a toggle (bidirectional follow). full_shape_error is the
+        # fail-closed marker: None = healthy, else "invalid"/"unreadable"/
+        # "unwritable". Missing state file is a legitimate first run, not an error.
+        self.full_shape = 0
+        self.full_shape_error = None
+        self.full_shape_state_path = os.path.join(user, "kinfx_full_shape.state")
         # App-side fallback (the host app inserts an unhandled printable key
         # literally, e.g. the fallback2 '2'): per-owner marker so clear()/blur()
         # of a failed owner keeps its latin/digit tail (half-width punctuation)
@@ -157,7 +167,58 @@ class Engine:
         ok = self.lib.kx_start(self.shared.encode(), self.user.encode(),
                                os.path.join(self.user, "log").encode(), 0)
         self.stamp = self._mtime()
+        self._load_full_shape_state()
         return ok != 0
+
+    def _load_full_shape_state(self):
+        """Load the authoritative global width (fail-closed).
+
+        Missing file = first run -> half-width default, not an error. Unreadable
+        or invalid content is an explicit error, never silently treated as
+        persistence success.
+        """
+        self.full_shape = 0
+        self.full_shape_error = None
+        try:
+            with open(self.full_shape_state_path, encoding="ascii") as f:
+                v = f.read().strip()
+        except FileNotFoundError:
+            return
+        except (UnicodeError, OSError):
+            # UnicodeError = malformed (non-ASCII) bytes like 0xff 0xfe; OSError =
+            # unreadable (permission). Both fail-closed, never silent persistence.
+            self.full_shape_error = "unreadable"
+            return
+        if v == "1":
+            self.full_shape = 1
+        elif v == "0":
+            self.full_shape = 0
+        else:
+            self.full_shape_error = "invalid"
+
+    def _persist_full_shape(self, v):
+        """Atomically persist the global width; report failure, never claim success."""
+        tmp = self.full_shape_state_path + ".tmp"
+        try:
+            with open(tmp, "w", encoding="ascii") as f:
+                f.write("1" if v else "0")
+            os.replace(tmp, self.full_shape_state_path)
+            self.full_shape_error = None
+            return True
+        except OSError:
+            self.full_shape_error = "unwritable"
+            return False
+
+    def _broadcast_full_shape(self, v):
+        """Apply the global width to every live owner immediately (bidirectional
+        follow), and update kept reservations so a later retry restores it too."""
+        for h, sid in list(self.sessions.items()):
+            if self.lib.kx_alive(sid):
+                self.lib.kx_set_option(sid, b"full_shape", v)
+        for snap in self.retry_runtime.values():
+            opts = list(snap["options"])
+            opts[1] = v
+            snap["options"] = opts
 
     # -- owner registry / native resolution -----------------------------------
     def native_session(self, h):
@@ -228,7 +289,9 @@ class Engine:
                     break
                 restored[h] = new_sid
         if ok:
-            # Handles stay stable; only the native ids are remapped.
+            # Handles stay stable; only the native ids are remapped. Each owner's
+            # full_shape is already the global (broadcast keeps them in sync), so
+            # the snapshot restore carries the current width through the rebuild.
             self.sessions = dict(restored)
             self.retry_runtime = {}
             self.app_fallback = {}
@@ -275,6 +338,10 @@ class Engine:
         sid = self.lib.kx_session(SCHEMA.encode())
         if not sid:
             return 0
+        # A new owner starts from the schema default (half-width). Adopt the
+        # global width at creation so it follows the last toggle even before its
+        # first key (destroy A / open B restores immediately, not lazily).
+        self.lib.kx_set_option(sid, b"full_shape", self.full_shape)
         self.next_handle += 1
         self.sessions[self.next_handle] = sid
         return self.next_handle
@@ -331,9 +398,24 @@ class Engine:
 
     def key(self, h, code, mask):
         sid = self.native_session(h)
-        if h and self.lib.kx_alive(sid):
+        alive = bool(h) and self.lib.kx_alive(sid) != 0
+        if alive:
             self.undrained.add(h)
-        return self.lib.kx_key(sid, code, mask) != 0
+        pre = self.lib.kx_option(sid, b"full_shape") if alive else None
+        handled = self.lib.kx_key(sid, code, mask) != 0
+        if alive:
+            post = self.lib.kx_option(sid, b"full_shape")
+            # Only the Shift+Space key_binder toggle changes full_shape inside a
+            # single key (the formatter's width_internal bypass restores it
+            # before returning). A change here is the toggle signal: adopt it,
+            # broadcast to every live owner and persist (fail-closed). Shortcut
+            # chords (Ctrl/Alt/Super) and modifier releases never flip the
+            # option, so they can never reach this persist path.
+            if post != pre:
+                self.full_shape = post
+                self._broadcast_full_shape(post)
+                self._persist_full_shape(post)
+        return handled
 
     def select_candidate(self, h, index):
         return self.lib.kx_select_candidate_on_current_page(self.native_session(h), index) != 0
