@@ -93,36 +93,14 @@ local function user_file(name)
   return dir .. "/" .. name
 end
 
--- Global, cross-context full_shape. librime's Shift+Space toggle is a per-
--- context option that resets to the schema default (half-width) on every new
--- context, so the width choice would be lost on a window/app switch. Persist
--- the user's last toggle in the user data dir and restore it when a context is
--- created, so full/half width survives owner changes until the next toggle.
-local function full_shape_state_path()
-  return user_file("kinfx_full_shape.state")
-end
-
-local function restore_full_shape(ctx)
-  local path = full_shape_state_path()
-  if not path then return end
-  local fh = io.open(path, "r")
-  if not fh then return end
-  local v = fh:read("*l")
-  fh:close()
-  if v == "1" or v == "0" then
-    ctx:set_option("full_shape", v == "1")
-  end
-end
-
-local function persist_full_shape(on)
-  local path = full_shape_state_path()
-  if not path then return end
-  local fh = io.open(path, "w")
-  if fh then
-    fh:write(on and "1" or "0")
-    fh:close()
-  end
-end
+-- full_shape is now owned by the frontend (mac Engine.swift / linux kxcore.py):
+-- the engine keeps the authoritative global width, restores it on every new
+-- owner at creation and broadcasts it to every live owner after a toggle. The
+-- shared Lua only returns kNoop for Shift+Space so librime's key_binder flips
+-- the per-context option; the frontend observes that option change (the signal)
+-- and persists/broadcasts. No file I/O here — the frontend is the sole writer,
+-- so missing/invalid/unwritable state fails closed in one place, not silently
+-- in two.
 
 -- About 350 short words; small enough for a Lua set.
 local unsafe_cache = nil
@@ -1317,10 +1295,9 @@ local function func(key, env)
     env.assoc_tap = false
     if env.shift_down then env.shift_used = true end
     if env.rshift_down then env.rshift_used = true end
-    -- The key_binder toggles full_shape after this processor returns. Persist
-    -- the resulting width so the next context restores it: otherwise the
-    -- toggle would reset to the schema default on every window/app switch.
-    persist_full_shape(not env.engine.context:get_option("full_shape"))
+    -- The key_binder flips full_shape after this processor returns; the frontend
+    -- observes that option change and broadcasts/persists it (see kxcore.py /
+    -- Engine.swift). Nothing to persist here — the frontend is the sole writer.
     return kNoop -- the original key_binder still owns full_shape
   end
   if key.keycode == BLUR and not key:release() then
@@ -1834,13 +1811,6 @@ return {
   processor = { init = init, fini = fini, func = function(key, env)
     activate(env)
     local ctx = env.engine.context
-    -- A fresh context starts at the schema default (half-width). Restore the
-    -- user's last full_shape toggle once, on the first key: init runs before
-    -- librime applies the switch defaults, so a restore there is overwritten.
-    if not env.full_shape_restored then
-      env.full_shape_restored = true
-      restore_full_shape(ctx)
-    end
     -- Native ascii_composer rejects idle letters, but full_shape's postprocessor
     -- may still sink them (without commit_notifier). Observe only that literal
     -- route, never an association placeholder or uncommitted inline preedit.

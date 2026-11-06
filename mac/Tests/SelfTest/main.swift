@@ -235,5 +235,44 @@ check("comma hello half-width", typeSeq(letters("hello") + [(0x2c, 0)]), "hello,
 check("toggle full comma full-width", typeSeq(shiftSpace + letters("vd1") + [(0x2c, 0)]), "好\u{ff0c}")
 check("toggle full space still half-width", typeSeq(shiftSpace + letters("vd1") + [(0xff1b, 0), (0x20, 0)]), "好\u{0020}")
 
+// full_shape global persistence: bidirectional broadcast to an already-typed
+// existing owner, new-owner restore (destroy A / open B), and shortcut no-persist.
+// These mirror linux/test-fullshape-global.py, which is the headless-verified side;
+// the state-file fail-closed cases (invalid/unreadable/unwritable) live there too.
+func toggleWidth(_ sess: UInt) {
+  for (k, m) in shiftSpace { _ = engine.key(sess, k, m) }
+  _ = engine.takeCommit(sess)
+}
+func width(_ sess: UInt) -> Int32 { kx_option(engine.nativeSession(sess), "full_shape") }
+do {
+  let a = engine.newSession(), b = engine.newSession()
+  for k: Int32 in [0x76, 0x64, 0x31] { _ = engine.key(b, k, 0); _ = engine.takeCommit(b) }
+  toggleWidth(a) // half -> full
+  check("broadcast half->full follows typed B", String(width(b)), "1")
+  toggleWidth(a) // full -> half
+  check("broadcast full->half follows typed B", String(width(b)), "0")
+  engine.destroy(a); engine.destroy(b)
+}
+do {
+  let a = engine.newSession()
+  toggleWidth(a) // half -> full (global = 1)
+  engine.destroy(a)
+  let b = engine.newSession()
+  check("destroy A then new B restores global before first key", String(width(b)), "1")
+  engine.destroy(b)
+}
+do {
+  let s = engine.newSession()
+  toggleWidth(s) // global -> full
+  let before = width(s)
+  _ = engine.key(s, 0x20, 1 << 2)         // Ctrl+Space (ascii_mode, not width)
+  _ = engine.key(s, 0x20, 1 << 3)         // Alt+Space
+  _ = engine.key(s, 0x20, 1 << 26)        // Super+Space
+  _ = engine.key(s, 0x20, (1 << 30) | 1)  // Shift+Space release
+  _ = engine.takeCommit(s)
+  check("shortcut chords never flip width", String(width(s)), String(before))
+  engine.destroy(s)
+}
+
 print(failures == 0 ? "ALL PASS" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

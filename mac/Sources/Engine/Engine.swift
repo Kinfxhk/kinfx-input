@@ -76,6 +76,43 @@ final class Engine {
     try prepareUserDir()
     started = kx_start(sharedDir, userDir, userDir + "/log", 0) != 0
     settingsStamp = stamp()
+    loadFullShapeState()
+  }
+
+  private func loadFullShapeState() {
+    globalFullShape = 0
+    fullShapeError = nil
+    guard FileManager.default.fileExists(atPath: fullShapeStatePath) else { return } // first run
+    guard let data = FileManager.default.contents(atPath: fullShapeStatePath),
+          let text = String(data: data, encoding: .ascii) else {
+      fullShapeError = "unreadable"; return
+    }
+    let v = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    if v == "1" { globalFullShape = 1 }
+    else if v == "0" { globalFullShape = 0 }
+    else { fullShapeError = "invalid" }
+  }
+
+  @discardableResult
+  private func persistFullShape(_ v: Int32) -> Bool {
+    do {
+      try (v == 1 ? "1" : "0").write(toFile: fullShapeStatePath, atomically: true, encoding: .ascii)
+      fullShapeError = nil
+      return true
+    } catch {
+      fullShapeError = "unwritable"
+      return false
+    }
+  }
+
+  private func broadcastFullShape(_ v: Int32) {
+    for (_, sid) in sessions where kx_alive(sid) != 0 {
+      kx_set_option(sid, "full_shape", v)
+    }
+    for (handle, var rt) in retryRuntime {
+      rt.options[1] = v
+      retryRuntime[handle] = rt
+    }
   }
 
   private var settingsStamp: Date?
@@ -104,7 +141,7 @@ final class Engine {
   private var undrained = Set<UInt>()
   // A failed rebuild has no input session. Keep only the already-proven-idle
   // switches and script category under the original controller handle for retry.
-  private struct IdleRuntime { let options: [Int32]; let tail: Int32; let digitTail: Int32 }
+  private struct IdleRuntime { var options: [Int32]; let tail: Int32; let digitTail: Int32 }
   private var retryRuntime: [UInt: IdleRuntime] = [:]
   // App-side fallback (the host app inserts an unhandled printable key literally,
   // e.g. the fallback2 '2'): per-owner marker so clear()/blur() of a failed owner
@@ -115,6 +152,15 @@ final class Engine {
   private var nativeRebuildFailed = false
   private var reloadPending = false
   private static let switches = ["ascii_mode", "full_shape", "simplification", "ascii_punct"]
+  // Authoritative global full_shape. librime's Shift+Space toggle is a per-context
+  // option, so the width would otherwise be lost on a window/app switch. The engine
+  // keeps the global width here, restores it on every new owner at creation and
+  // broadcasts it to every live owner after a toggle (bidirectional follow).
+  // fullShapeError is the fail-closed marker: nil = healthy, else "invalid"/
+  // "unreadable"/"unwritable". A missing state file is a legitimate first run.
+  private(set) var globalFullShape: Int32 = 0
+  private(set) var fullShapeError: String? = nil
+  var fullShapeStatePath: String { userDir + "/kinfx_full_shape.state" }
   // Engine handles are controller-owned, not raw RimeSessionIds. Native-only
   // QA probes must resolve them immediately before calling the C test API.
   func nativeSession(_ s: UInt) -> UInt { sessions[s] ?? 0 }
@@ -184,6 +230,9 @@ final class Engine {
     let sid = UInt(kx_session(Self.schema))
     guard sid != 0 else { return 0 }
     nextSession += 1; sessions[nextSession] = sid
+    // A new owner starts from the schema default (half-width); adopt the global
+    // width at creation so it follows the last toggle even before its first key.
+    kx_set_option(sid, "full_shape", globalFullShape)
     return nextSession
   }
   func alive(_ s: UInt) -> Bool { kx_alive(native(s)) != 0 }
@@ -224,7 +273,21 @@ final class Engine {
   func key(_ s: UInt, _ code: Int32, _ mask: Int32) -> Bool {
     guard alive(s) else { return false }
     undrained.insert(s)
-    return kx_key(native(s), code, mask) != 0
+    let sid = native(s)
+    let pre = kx_option(sid, "full_shape")
+    let handled = kx_key(sid, code, mask) != 0
+    let post = kx_option(sid, "full_shape")
+    // Only the Shift+Space key_binder toggle changes full_shape inside a single
+    // key (the formatter's width_internal bypass restores it before returning).
+    // A change here is the toggle signal: adopt it, broadcast to every live
+    // owner and persist (fail-closed). Shortcut chords (Ctrl/Alt/Super) and
+    // modifier releases never flip the option, so they can never persist.
+    if post != pre {
+      globalFullShape = post
+      broadcastFullShape(post)
+      persistFullShape(post)
+    }
+    return handled
   }
   // 0.1.4 focus left (click elsewhere, app switch): F35 makes english_mix.lua commit what was typed
   // (English letters as typed, Sucheng as Return gives), then Rime is cleared.
