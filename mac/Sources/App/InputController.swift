@@ -84,6 +84,11 @@ final class KINFXInputController: IMKInputController {
     // app (fallback2 contract). Detect it up front so an unhandled key during a
     // failed rebuild still records the app-side fallback for tail preservation.
     let appFallbackDigit: Bool? = {
+      // A shortcut (Control/Option/Command) is never a literal app-side fallback:
+      // Ctrl+C inserts no 'c', so such keys must not create the routing marker
+      // (mirrors the linux kinfx-ibus NOT_LITERAL guard). Plain and Shift keys
+      // stay eligible — Shift+A still inserts 'A' literally.
+      if !mods.isDisjoint(with: [.control, .option, .command]) { return nil }
       guard let u = chars?.unicodeScalars, u.count == 1, let c = u.first else { return nil }
       if (0x30...0x39).contains(c.value) { return true }
       if (0x41...0x5a).contains(c.value) || (0x61...0x7a).contains(c.value) { return false }

@@ -56,7 +56,7 @@ for suite in sys.argv[1:] or ['retry','legacy-settings','legacy-controller','fai
     rows=[json.loads(s) for s in p.stdout.splitlines() if s.startswith('{')]
     (out/'rows.json').write_text(json.dumps(rows,ensure_ascii=False,indent=2))
     row={'suite':suite,'source':str(TREE),'exit':p.returncode,'checks':len(rows),'failed':sum(not x['pass'] for x in rows),'raw':str(out)}
-    expected={'retry':23,'legacy-settings':62,'legacy-controller':43,'failure-seams':14,'persistence-io':24,'baseline-repro':1}
+    expected={'retry':27,'legacy-settings':62,'legacy-controller':43,'failure-seams':14,'persistence-io':24,'baseline-repro':1}
     assert len(rows)==expected[suite],f'Incomplete {suite}: {len(rows)}/{expected[suite]} assertions'
     summary.append(row);print(json.dumps(row),flush=True)
 (OUT/'summary.json').write_text(json.dumps(summary,indent=2))

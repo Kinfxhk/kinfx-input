@@ -109,5 +109,25 @@ do {
  let f=Fixture();f.half();f.type("vd1")
  check(f.sid != old && f.t.string=="好" && kx_option(raw(f.sid),"full_shape")==0 && raw(old)==0,"destroyed-owner-never-resurrected",["old":old,"new":f.sid,"text":f.t.string]);f.key(53)
 }
+// Modifier-parity: Control/Command shortcuts during a failed rebuild are not a
+// literal app-side fallback (Ctrl+C inserts no 'c'), so they must not create the
+// routing marker that keeps a failed wide owner's period half-width.
+do {
+  let f=Fixture();f.half();f.key(49," ",.shift);f.type("hello");f.key(36,"\r")
+  precondition(f.t.string=="hello" && kx_option(raw(f.sid),"full_shape")==1 && prop(f.sid,"kinfx_punct_tail")=="latin")
+  try breakSchema();change("page_size",1)
+  check(!e.alive(f.sid),"modifier-shortcut-rebuild-failure-latched")
+  // The host app inserts nothing for a shortcut: model only the unhandled keys.
+  let ctrl=f.c.inputText("c",key:8,modifiers:Int(NSEvent.ModifierFlags.control.rawValue),client:f.t)
+  let cmd=f.c.inputText("c",key:8,modifiers:Int(NSEvent.ModifierFlags.command.rawValue),client:f.t)
+  check(!ctrl && !cmd && f.t.string=="hello" && f.sid != 0,"modifier-shortcut-unhandled-no-literal-insert",["ctrl":ctrl,"cmd":cmd,"text":f.t.string])
+  f.c.commitComposition(f.t)
+  try restoreSchema();change("page_size",0)
+  f.type(".")
+  check(f.t.string=="hello。","modifier-shortcut-wide-period-stays-wide-after-retry",["text":f.t.string])
+  f.type("vd1")
+  check(f.t.string=="hello。好","modifier-shortcut-wide-Chinese-after-retry",["text":f.t.string])
+  f.key(53)
+}
 check(NSWorkspace.shared.frontmostApplication?.processIdentifier==front,"no-frontmost-change")
 w.close();exit(failures==0 ? 0:1)
