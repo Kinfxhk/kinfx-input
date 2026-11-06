@@ -180,6 +180,7 @@ for (chars, mods, cont, want) in [
   ("B", RimeKeys.Mods.shift, true, true),
   ("b", RimeKeys.Mods.shift, true, true),
   (";", RimeKeys.Mods.shift, true, true),
+  (" ", RimeKeys.Mods.shift, true, false),
   ("b", [], true, false),
   ("b", RimeKeys.Mods.shift, false, false),
   ("b", [.shift, .command], true, false),
@@ -187,6 +188,25 @@ for (chars, mods, cont, want) in [
   let got = ShiftEnglish.shouldTypeDirectly(chars: chars, mods: mods, continuing: cont)
   check("shift-run chars=\(chars) cont=\(cont)", got ? "true" : "false", want ? "true" : "false")
 }
+
+// Shift+Space is reserved for Rime's full_shape toggle: shouldCommit must never
+// fire for a space, so the width command reaches the engine unchanged. Other
+// printable ASCII keys (! 1 …) keep the existing short-code English gesture.
+for (preedit, chars, mods, expected) in [
+  ("of", " ", RimeKeys.Mods.shift, false),
+  ("of", "!", RimeKeys.Mods.shift, true),
+  ("of", "1", RimeKeys.Mods.shift, true),
+  ("hel", " ", RimeKeys.Mods.shift, false),
+  ("", " ", RimeKeys.Mods.shift, false),
+  ("of", " ", [.shift, .command], false),
+  ("人火", " ", RimeKeys.Mods.shift, false),
+] {
+  check("legacy Shift collision preedit=\(preedit) chars=\(String(reflecting: chars)) mods=\(mods.rawValue)",
+        String(ShiftEnglish.shouldCommit(preedit: preedit, mods: mods, chars: chars)), String(expected))
+}
+check("ShiftSpace mapping reaches engine unchanged when not intercepted", km(RimeKeys.keyDown(keyCode: 49, chars: " ", bare: " ", mods: .shift)), "20/1")
+check("Right remains Rime candidate paging key", km(RimeKeys.keyDown(keyCode: 124, chars: nil, bare: nil, mods: [])), "ff53/0")
+check("Left remains Rime candidate paging key", km(RimeKeys.keyDown(keyCode: 123, chars: nil, bare: nil, mods: [])), "ff51/0")
 
 print(failures == 0 ? "ALL PASS" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

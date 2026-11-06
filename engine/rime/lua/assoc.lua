@@ -129,13 +129,20 @@ local function close_assoc(ctx)
 end
 
 local function open_assoc(env, ctx, ch)
+  -- Confirming a candidate may only select a prefix, leaving the suffix in
+  -- composition. A zero-length placeholder is valid only after the native
+  -- commit has cleared BOTH input and segments; otherwise caret_pos=0 would
+  -- leave old segment ranges indexing an empty composition input.
+  local comp = ctx.composition
+  if (ctx.input or "") ~= "" or not comp or not comp:empty() then
+    return false
+  end
   local code = encode_char(ch)
   if not has_exact(env.mem, code) then
     return false
   end
   local seg = Segment(0, 0)
   seg.tags = Set({ "kinfx_assoc", "placeholder" })
-  local comp = ctx.composition
   rearming = true
   comp:push_back(seg)
   ctx:set_property("kinfx_assoc_code", code)
@@ -202,7 +209,33 @@ local function processor_init(env)
   -- which drops the placeholder segment. Like librime-predict, put it back on
   -- every update while the association is armed (kinfx_assoc_code set) and
   -- nothing is being composed. Every closing path clears kinfx_assoc_code.
+  -- Every committed suffix ends its association, regardless of which key
+  -- representation or native selection path caused the commit. Disarm before
+  -- native Clear/update can resurrect the old placeholder.
+  -- Only native ordinary 1–2-code clicks need the deferred opening below;
+  -- keyboard ordinary picks already open after confirming the selection.
+  env.click_commit_conn = env.engine.context.commit_notifier:connect(function(ctx)
+    if assoc_active(ctx) then
+      ctx:set_property("kinfx_assoc_code", "")
+      return
+    end
+    if ctx:get_property("kinfx_candidate_click") ~= "1" then
+      return
+    end
+    if #(ctx.input or "") <= 2 then
+      local text = ctx:get_commit_text()
+      if is_single_cjk(text) then
+        env.clicked_char = text
+      end
+    end
+  end, 0)
   env.update_conn = env.engine.context.update_notifier:connect(function(ctx)
+    if env.clicked_char then
+      local ch = env.clicked_char
+      env.clicked_char = nil
+      open_assoc(env, ctx, ch)
+      return
+    end
     if rearming then
       return
     end
@@ -224,6 +257,9 @@ local function processor_init(env)
 end
 
 local function processor_fini(env)
+  if env.click_commit_conn then
+    env.click_commit_conn:disconnect()
+  end
   if env.update_conn then
     env.update_conn:disconnect()
   end

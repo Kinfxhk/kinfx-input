@@ -33,6 +33,7 @@ switches:
     states: [ 中文, 西文 ]
     abbrev: [ 中, Ａ ]
   - name: full_shape
+    reset: 1
     states: [ 半角, 全角 ]
   - name: simplification
     states: [ 漢字, 汉字 ]
@@ -178,8 +179,8 @@ english:
 association:
   enable: true
   max: 36
-  # 揀字後第一下空白：page＝Windows（翻聯想頁、吞咗，預設：速成行為優先）｜type＝關聯想再打空格
-  space: page
+  # 揀字後第一下空白：type＝關聯想再打空格（預設）｜page＝Windows（翻聯想頁、吞咗）
+  space: type
 
 assoc_translator:
   tag: kinfx_assoc

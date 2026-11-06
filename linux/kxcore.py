@@ -88,14 +88,45 @@ class Engine:
         for n in ("kx_alive", "kx_destroy", "kx_clear", "kx_commit_composition"):
             getattr(lib, n).argtypes = [ctypes.c_size_t]
         lib.kx_key.argtypes = [ctypes.c_size_t, ctypes.c_int, ctypes.c_int]
+        lib.kx_select_candidate_on_current_page.argtypes = [ctypes.c_size_t, ctypes.c_int]
+        lib.kx_select_candidate_on_current_page.restype = ctypes.c_int
         for n in ("kx_take_commit", "kx_context"):
             getattr(lib, n).argtypes = [ctypes.c_size_t]
             getattr(lib, n).restype = ctypes.c_void_p
         lib.kx_property.argtypes = [ctypes.c_size_t, ctypes.c_char_p]
         lib.kx_property.restype = ctypes.c_void_p
+        lib.kx_redeploy.argtypes = []
+        lib.kx_redeploy.restype = ctypes.c_int
+        lib.kx_has_pending.argtypes = [ctypes.c_size_t]
+        lib.kx_has_pending.restype = ctypes.c_int
+        lib.kx_option.argtypes = [ctypes.c_size_t, ctypes.c_char_p]
+        lib.kx_option.restype = ctypes.c_int
+        lib.kx_set_option.argtypes = [ctypes.c_size_t, ctypes.c_char_p, ctypes.c_int]
+        for n in ("kx_idle_punct_tail", "kx_idle_digit_tail"):
+            getattr(lib, n).argtypes = [ctypes.c_size_t]
+            getattr(lib, n).restype = ctypes.c_int
+        for n in ("kx_restore_idle_punct_tail", "kx_restore_idle_digit_tail"):
+            getattr(lib, n).argtypes = [ctypes.c_size_t, ctypes.c_int]
+            getattr(lib, n).restype = ctypes.c_int
         self.lib = lib
         self.libc = ctypes.CDLL(None)
         self.libc.free.argtypes = [ctypes.c_void_p]
+        # Owner/pending/undrained registry (port of mac/Sources/Engine/Engine.swift).
+        # A logical handle is the owner identity; the native RimeSessionId is resolved
+        # on every call. Reloads remap handle->sid, so a handle survives any number of
+        # reloads (no single-hop remap, no orphaned intermediate session).
+        self.SWITCHES = ("ascii_mode", "full_shape", "simplification", "ascii_punct")
+        self.sessions = {}        # logical handle -> native session id
+        self.next_handle = 0
+        self.undrained = set()    # logical handles whose native commit queue is unread
+        self.retry_runtime = {}   # logical handle -> idle snapshot kept across a failed redeploy
+        self.native_rebuild_failed = False
+        self.reload_pending = False
+        # App-side fallback (the host app inserts an unhandled printable key
+        # literally, e.g. the fallback2 '2'): per-owner marker so clear()/blur()
+        # of a failed owner keeps its latin/digit tail (half-width punctuation)
+        # instead of revoking it. Mirrors mac Engine.appFallback.
+        self.app_fallback = {}   # logical handle -> inserted char was an ASCII digit
 
     def _mtime(self):
         try:
@@ -128,8 +159,102 @@ class Engine:
         self.stamp = self._mtime()
         return ok != 0
 
+    # -- owner registry / native resolution -----------------------------------
+    def native_session(self, h):
+        """Resolve a logical owner handle to its current native session id (0 if unknown)."""
+        return self.sessions.get(h, 0)
+
+    def _idle(self):
+        """Drop handles whose native session died; True when every live owner is drained and idle."""
+        for h in list(self.sessions):
+            if not self.lib.kx_alive(self.sessions[h]):
+                self.sessions.pop(h, None)
+                self.undrained.discard(h)
+        for h in list(self.sessions):
+            if h in self.undrained:
+                return False
+            if self.lib.kx_has_pending(self.sessions[h]) != 0:
+                return False
+        return True
+
+    def _capture(self, h):
+        """Snapshot one idle owner's runtime; None when its script/digit tail is unknown."""
+        sid = self.sessions[h]
+        options = [self.lib.kx_option(sid, k.encode()) for k in self.SWITCHES]
+        tail = self.lib.kx_idle_punct_tail(sid)
+        digit = self.lib.kx_idle_digit_tail(sid)
+        if tail < 0 or digit < 0:
+            return None
+        return {"options": options, "tail": tail, "digit": digit}
+
+    def _maybe_reload(self):
+        """Apply a pending reload once every owner is idle/drained, preserving each owner's runtime."""
+        if not self.reload_pending:
+            return False
+        if not self._idle():
+            return False
+        # Snapshot source: live owners, plus kept reservations from a failed redeploy.
+        snapshots = {}
+        for h in list(self.sessions):
+            snap = self._capture(h)
+            if snap is None:
+                return False  # unknown input: defer, never destroy
+            snapshots[h] = snap
+        for h, snap in self.retry_runtime.items():
+            snapshots[h] = snap
+        if not snapshots:
+            ok = self.lib.kx_redeploy() != 0
+            # A rebuild attempt consumes the explicit request whether it succeeds
+            # or fails; a failure latches native_rebuild_failed and must be retried
+            # only by a later explicit changed-settings reload, never implicitly.
+            self.reload_pending = False
+            self.native_rebuild_failed = not ok
+            return ok
+        ok = self.lib.kx_redeploy() != 0
+        restored = {}
+        if ok:
+            for h, snap in snapshots.items():
+                new_sid = self.lib.kx_session(SCHEMA.encode())
+                if not new_sid:
+                    ok = False
+                    break
+                for k, v in zip(self.SWITCHES, snap["options"]):
+                    self.lib.kx_set_option(new_sid, k.encode(), v)
+                if self.lib.kx_restore_idle_punct_tail(new_sid, snap["tail"]) == 0:
+                    ok = False
+                    break
+                if self.lib.kx_restore_idle_digit_tail(new_sid, snap["digit"]) == 0:
+                    ok = False
+                    break
+                restored[h] = new_sid
+        if ok:
+            # Handles stay stable; only the native ids are remapped.
+            self.sessions = dict(restored)
+            self.retry_runtime = {}
+            self.app_fallback = {}
+            self.undrained.clear()
+        else:
+            # Keep the idle snapshot: the native sessions are gone (cleanup_all_sessions)
+            # but the owner->runtime reservation survives for the explicit retry.
+            self.retry_runtime = snapshots
+            self.sessions = {}
+            self.undrained.clear()
+            for new_sid in restored.values():
+                self.lib.kx_destroy(new_sid)
+        # Consume the explicit request on both outcomes. A failed rebuild is
+        # failed-latched: commit()/destroy() must not implicitly re-deploy, only a
+        # later explicit changed-settings retry may re-arm and rebuild.
+        self.reload_pending = False
+        self.native_rebuild_failed = not ok
+        return ok
+
     def reload_if_changed(self):
-        """The settings window is another process; it only writes settings.json."""
+        """The settings window is another process; it only writes settings.json.
+
+        Deferred until every owner is drained and idle, then redeploys and restores
+        each owner's 4 switches + script tail + digit tail. Pending/undrained/unknown
+        owners block the redeploy (they are never destroyed mid-composition).
+        """
         if self._mtime() == self.stamp:
             return False
         self.settings = load(self.settings_path)
@@ -140,17 +265,78 @@ class Engine:
             os.remove(os.path.join(self.user, "build", SCHEMA + ".schema.yaml"))
         except OSError:
             pass
-        self.lib.kx_redeploy()
-        return True
+        self.reload_pending = True
+        return self._maybe_reload()
 
     def session(self):
-        return self.lib.kx_session(SCHEMA.encode())
+        """Create an owner and return its stable logical handle (0 on failure)."""
+        if self.native_rebuild_failed:
+            return 0
+        sid = self.lib.kx_session(SCHEMA.encode())
+        if not sid:
+            return 0
+        self.next_handle += 1
+        self.sessions[self.next_handle] = sid
+        return self.next_handle
 
-    def alive(self, s):
-        return bool(s) and self.lib.kx_alive(s) != 0
+    def owns(self, h):
+        """True when h is a live owner or holds a kept idle reservation across a failed rebuild."""
+        return bool(h) and (self.alive(h) or h in self.retry_runtime)
 
-    def key(self, s, code, mask):
-        return self.lib.kx_key(s, code, mask) != 0
+    def destroy(self, h):
+        sid = self.sessions.pop(h, None)
+        if sid:
+            self.lib.kx_destroy(sid)
+        self.undrained.discard(h)
+        self.retry_runtime.pop(h, None)
+        self.app_fallback.pop(h, None)
+        self._maybe_reload()
+
+    def note_app_fallback(self, h, is_ascii_digit):
+        """Record that the host app inserted a literal character for an unhandled
+        key (fallback2 contract). The engine never saw that text, so a later
+        clear/blur of a failed owner must keep — not revoke — this owner's tail so
+        a following period stays half-width. `is_ascii_digit` marks a digit-led
+        run (e.g. the '2' in "hello2"). Mirrors mac Engine.noteAppFallback."""
+        self.app_fallback[h] = is_ascii_digit
+
+    def _revoke_routing(self, h):
+        """Same-owner explicit finalization while native is unavailable: empty only
+        this owner's routing metadata (script tail + digit tail). The logical owner
+        and its four runtime switches stay, so a later explicit retry still restores
+        width under the same handle (C transition). An app-side fallback marker keeps
+        the latin/digit tail instead of revoking it (half-width punctuation)."""
+        snap = self.retry_runtime.get(h)
+        if snap is None:
+            return
+        if h in self.app_fallback:
+            # The app inserted text the engine never saw: keep the script tail so the
+            # next punctuation stays half-width, and mark a digit-led run for a digit.
+            is_digit = self.app_fallback[h]
+            self.retry_runtime[h] = {"options": snap["options"], "tail": snap["tail"],
+                                     "digit": 1 if is_digit else snap["digit"]}
+            return
+        self.retry_runtime[h] = {"options": snap["options"], "tail": 0, "digit": 0}
+
+    def clear(self, h):
+        sid = self.native_session(h)
+        if sid:
+            self.undrained.add(h)
+            self.lib.kx_clear(sid)
+        else:
+            self._revoke_routing(h)
+
+    def alive(self, h):
+        return bool(h) and self.lib.kx_alive(self.native_session(h)) != 0
+
+    def key(self, h, code, mask):
+        sid = self.native_session(h)
+        if h and self.lib.kx_alive(sid):
+            self.undrained.add(h)
+        return self.lib.kx_key(sid, code, mask) != 0
+
+    def select_candidate(self, h, index):
+        return self.lib.kx_select_candidate_on_current_page(self.native_session(h), index) != 0
 
     def _take(self, p):
         if not p:
@@ -160,16 +346,22 @@ class Engine:
         finally:
             self.libc.free(p)
 
-    def commit(self, s):
-        return self._take(self.lib.kx_take_commit(s))
+    def commit(self, h):
+        text = self._take(self.lib.kx_take_commit(self.native_session(h)))
+        self.undrained.discard(h)
+        self._maybe_reload()
+        return text
 
-    def blur_text(self, s):
+    def property(self, h, name):
+        return self._take(self.lib.kx_property(self.native_session(h), name.encode())) or ""
+
+    def blur_text(self, h):
         """What F35 (focus left) would commit now; english_mix.lua keeps it in a context property."""
-        return self._take(self.lib.kx_property(s, b"kinfx_blur")) or ""
+        return self.property(h, "kinfx_blur")
 
-    def view(self, s):
-        """(preedit, cursor_chars, page_size, candidates[(text, comment)])"""
-        raw = self._take(self.lib.kx_context(s))
+    def view(self, h):
+        """(preedit, cursor_chars, page_size, candidates[(text, comment)])."""
+        raw = self._take(self.lib.kx_context(self.native_session(h)))
         if raw is None:
             return "", 0, 0, []
         f = raw.split("\x1f")
