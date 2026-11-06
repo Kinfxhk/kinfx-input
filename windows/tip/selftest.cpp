@@ -299,10 +299,20 @@ int main() {
       want = std::to_string(orig["modifiers"]) + "/" + std::to_string(orig["virtual_key"]) + "/" +
              std::to_string(orig["language_hotkey"]) + "/" + std::to_string(orig["layout_hotkey"]);
     }
+    // CHT Ctrl+Space (IME hotkey 0x70) is cleared too; its original sits in hotkeys-backup-cht.json.
+    const wchar_t *HK70 = L"Control Panel\\Input Method\\Hot Keys\\00000070";
+    std::ifstream cf(kx::UserDir() + L"\\hotkeys-backup-cht.json");
+    std::string cjson((std::istreambuf_iterator<char>(cf)), std::istreambuf_iterator<char>());
+    cf.close();
+    std::smatch cm;
+    long chtVk = std::regex_search(cjson, cm, std::regex("\"cht_virtual_key\"\\s*:\\s*([0-9]+)")) ? std::stol(cm[1]) : reg(HK70, L"Virtual Key");
     kx::TakeOverHotkeys();
     std::string taken = state();                    // sequenced: an argument order would let state()
+    long taken70 = reg(HK70, L"Virtual Key");
     bool back = kx::RestoreHotkeys();               // and the restore swap places
     std::string restored = state();
+    Check("CHT Ctrl+Space hotkey off", std::to_string(taken70 <= 0 ? 0 : taken70), "0");
+    Check("CHT Ctrl+Space hotkey restored", std::to_string(reg(HK70, L"Virtual Key")), std::to_string(chtVk));
     Check("hotkeys taken over", taken, "0/0/1/3");
     Check("hotkeys restored", std::to_string(back ? 1 : 0) + "/" + restored, "1/" + want);
     Check("hotkey backup removed", std::to_string(GetFileAttributesW(bp.c_str()) != INVALID_FILE_ATTRIBUTES ? 1 : 0), "0");

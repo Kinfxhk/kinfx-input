@@ -161,7 +161,39 @@ static void NotifyInputChanged() {
   SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM)L"Keyboard Layout", SMTO_ABORTIFHUNG, 1000, nullptr);
 }
 
+// IME_THOTKEY_IME_NONIME_TOGGLE (0x70, Traditional Chinese): Ctrl+Space toggles the IME open state in
+// win32k before TSF sees it. Measured on the host (Notepad 11.2607, Edge, VS Code): the key sink never
+// got Ctrl+Space while 0x70 was set, and did as soon as 0x70 was cleared. The registry copy is only read
+// at logon, so the live table goes through ImmSetHotKey (which also updates the registry). The original
+// is kept in its own backup file, so a pre-existing hotkeys-backup.json stays the user's original.
+static const DWORD kChtToggle = 0x70;
+static std::wstring ChtHotkeyBackup() { return UserDir() + L"\\hotkeys-backup-cht.json"; }
+typedef BOOL(WINAPI *ImmGetHotKeyFn)(DWORD, UINT *, UINT *, HKL *);
+typedef BOOL(WINAPI *ImmSetHotKeyFn)(DWORD, UINT, UINT, HKL);
+static HMODULE Imm() { static HMODULE m = LoadLibraryW(L"imm32.dll"); return m; }
+static bool ChtGet(UINT *mod, UINT *vk) {
+  auto f = Imm() ? (ImmGetHotKeyFn)GetProcAddress(Imm(), "ImmGetHotKey") : nullptr;
+  HKL h = nullptr;
+  *mod = *vk = 0;
+  return f && f(kChtToggle, mod, vk, &h);  // FALSE = not assigned
+}
+static bool ChtSet(UINT mod, UINT vk) {
+  auto f = Imm() ? (ImmSetHotKeyFn)GetProcAddress(Imm(), "ImmSetHotKey") : nullptr;
+  return f && f(kChtToggle, mod, vk, nullptr);
+}
+
 void TakeOverHotkeys() {
+  {
+    UINT mod = 0, vk = 0;
+    bool set = ChtGet(&mod, &vk) && vk;
+    std::wstring cb = ChtHotkeyBackup();
+    if (set && GetFileAttributesW(cb.c_str()) == INVALID_FILE_ATTRIBUTES) {
+      char json[128];
+      snprintf(json, sizeof json, "{\n \"cht_modifiers\": %u,\n \"cht_virtual_key\": %u\n}\n", mod, vk);
+      WriteIfChanged(cb, json);
+    }
+    if (set) ChtSet(0, 0);
+  }
   std::wstring b = HotkeyBackup();
   if (GetFileAttributesW(b.c_str()) == INVALID_FILE_ATTRIBUTES) {  // an existing backup is the user's original
     SYSTEMTIME t;
@@ -185,6 +217,14 @@ void TakeOverHotkeys() {
 }
 
 bool RestoreHotkeys() {
+  {
+    std::string cht = ReadAll(ChtHotkeyBackup());
+    static const std::regex m("\"cht_modifiers\"\\s*:\\s*([0-9]+)"), v("\"cht_virtual_key\"\\s*:\\s*([0-9]+)");
+    std::smatch a, b;
+    if (std::regex_search(cht, a, m) && std::regex_search(cht, b, v) &&
+        ChtSet((UINT)std::stoul(a[1]), (UINT)std::stoul(b[1])))
+      DeleteFileW(ChtHotkeyBackup().c_str());
+  }
   std::string text = ReadAll(HotkeyBackup());
   if (text.empty()) return false;
   static const std::regex num("\"([a-z_]+)\"\\s*:\\s*(-?[0-9]+)");
