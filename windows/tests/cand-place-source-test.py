@@ -13,6 +13,11 @@ class CandidatePlacement(unittest.TestCase):
         self.assertIn('kx::PlaceCandidate(caretLine, ww, wh, area, 2,', SRC)
         self.assertIn('vertical_ && items_.size() >= 5', SRC)
 
+    def test_show_uses_placed_size(self):
+        # A shrunk placement must size the window too, not only move it.
+        self.assertIn('ww = placed.Width();', SRC)
+        self.assertIn('wh = placed.Height();', SRC)
+
     def test_tall_list_prefers_above(self):
         # >= 5 rows must ask for the space above; short lists keep the familiar below.
         self.assertIn('if (aboveFits && preferAbove)', HDR)

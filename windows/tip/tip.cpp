@@ -162,6 +162,10 @@ class CandWin {
       at2.x = placed.left;
       at2.y = placed.top;
       at = at2;
+      // PlaceCandidate may shrink the panel to the room it has: the window must use that size,
+      // or it still spills past the work area (Mac review 2026-11-06).
+      ww = placed.Width();
+      wh = placed.Height();
       Trace("cand place=" + std::to_string(how) + " at=" + std::to_string(at.x) + "," + std::to_string(at.y) +
             " wh=" + std::to_string(ww) + "x" + std::to_string(wh));
     }
