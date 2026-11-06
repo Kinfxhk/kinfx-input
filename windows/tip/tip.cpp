@@ -123,21 +123,25 @@ class CandWin {
       font_ = CreateFontW(-S(kFontPx), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Microsoft JhengHei UI");
     }
     int ww = 0, wh = 0;
-    auto measure = [&] {
+    std::vector<int> widths;
+    {
       HDC dc = GetDC(hwnd_);
       HGDIOBJ old = SelectObject(dc, font_);
-      int w = 0, h = 0;
       for (auto &s : items_) {
         SIZE sz;
         GetTextExtentPoint32W(dc, s.c_str(), (int)s.size(), &sz);
         lineH_ = sz.cy + S(8);
-        if (vertical_) { w = max(w, (int)sz.cx); h += lineH_; }
-        else { w += sz.cx + S(20); h = lineH_; }
+        widths.push_back((int)sz.cx);
       }
       SelectObject(dc, old);
       ReleaseDC(hwnd_, dc);
-      ww = w + S(28); wh = h + S(12);
+    }
+    // Paint and hit-test share one cell layout, so a panel shrunk to the room it has re-flows its
+    // candidates instead of clipping them (Mac review 2026-11-06 P2).
+    auto layout = [&](int maxW, int maxH) {
+      cells_ = kx::LayoutCells(widths, lineH_, vertical_, maxW, maxH, S(14), S(6), S(20), &ww, &wh);
     };
+    auto measure = [&] { layout(1 << 30, 1 << 30); };
     measure();
     MONITORINFO mi = {sizeof mi};
     if (GetMonitorInfoW(MonitorFromPoint(at, MONITOR_DEFAULTTONEAREST), &mi)) {
@@ -157,8 +161,17 @@ class CandWin {
       }
       POINT at2 = at;
       int how = -1;
-      kx::Rect placed = kx::PlaceCandidate(caretLine, ww, wh, area, 2,
-                                           vertical_ && items_.size() >= 5, &how);
+      const bool preferAbove = vertical_ && items_.size() >= 5;
+      kx::Rect placed = kx::PlaceCandidate(caretLine, ww, wh, area, 2, preferAbove, &how);
+      if (placed.Width() < ww || placed.Height() < wh) {
+        // Shrunk: re-flow the candidates into the room PlaceCandidate found (vertical lists wrap
+        // into columns, rows wrap into lines), then place the re-flowed size.
+        const int natW = ww, natH = wh;
+        layout(vertical_ ? area.Width() : placed.Width(), vertical_ ? placed.Height() : area.Height());
+        placed = kx::PlaceCandidate(caretLine, ww, wh, area, 2, preferAbove, &how);
+        Trace("cand relayout " + std::to_string(natW) + "x" + std::to_string(natH) + " -> " +
+              std::to_string(ww) + "x" + std::to_string(wh));
+      }
       at2.x = placed.left;
       at2.y = placed.top;
       at = at2;
@@ -205,16 +218,13 @@ class CandWin {
   int HitItem(POINT pt) {
     if (hintOn_ || !pick_ || !IsWindowVisible(hwnd_) || !ScreenToClient(hwnd_, &pt)) return -1;
     RECT rc; GetClientRect(hwnd_, &rc);
-    if (pt.x < S(14) || pt.x >= rc.right - S(14) || pt.y < S(6)) return -1;
-    int x = S(14), y = S(6), found = -1;
-    HDC dc = GetDC(hwnd_); HGDIOBJ old = SelectObject(dc, font_);
-    for (size_t i = 0; i < items_.size(); ++i) {
-      SIZE sz; GetTextExtentPoint32W(dc, items_[i].c_str(), (int)items_[i].size(), &sz);
-      const int width = vertical_ ? rc.right - S(28) : sz.cx + S(20);
-      if (pt.x >= x && pt.x < x + width && pt.y >= y && pt.y < y + lineH_) { found = (int)i; break; }
-      if (vertical_) y += lineH_; else x += width;
+    for (size_t i = 0; i < cells_.size() && i < items_.size(); ++i) {
+      const kx::Rect &c = cells_[i];
+      // A cell cut by the window edge only counts where it is visible.
+      if (pt.x >= c.left && pt.x < c.right && pt.x < rc.right && pt.y >= c.top && pt.y < c.bottom && pt.y < rc.bottom)
+        return (int)i;
     }
-    SelectObject(dc, old); ReleaseDC(hwnd_, dc); return found;
+    return -1;
   }
   void Create() {
     static bool reg = false;
@@ -286,12 +296,8 @@ class CandWin {
       SetBkMode(dc, TRANSPARENT);
       SetTextColor(dc, RGB(0xee, 0xe6, 0xdc));
       HGDIOBJ old = SelectObject(dc, self->font_);
-      int x = self->S(14), y = self->S(6);
-      for (auto &s : self->items_) {
-        TextOutW(dc, x, y, s.c_str(), (int)s.size());
-        if (self->vertical_) y += self->lineH_;
-        else { SIZE sz; GetTextExtentPoint32W(dc, s.c_str(), (int)s.size(), &sz); x += sz.cx + self->S(20); }
-      }
+      for (size_t i = 0; i < self->items_.size() && i < self->cells_.size(); ++i)
+        TextOutW(dc, self->cells_[i].left, self->cells_[i].top, self->items_[i].c_str(), (int)self->items_[i].size());
       SelectObject(dc, old);
       EndPaint(h, &ps);
       return 0;
@@ -301,6 +307,7 @@ class CandWin {
   HWND hwnd_ = nullptr;
   HFONT font_ = nullptr;
   std::vector<std::wstring> items_;
+  std::vector<kx::Rect> cells_;  // client-space cell per item: the one layout paint and hit-test share
   std::function<void(int)> pick_;
   int pressed_ = -1;
   bool vertical_ = true;

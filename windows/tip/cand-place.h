@@ -4,6 +4,8 @@
 #ifndef KX_CAND_PLACE_H
 #define KX_CAND_PLACE_H
 
+#include <vector>
+
 namespace kx {
 
 struct Rect {
@@ -56,6 +58,47 @@ inline Rect PlaceCandidate(Rect caret, int w, int h, const Rect &area, int gap, 
   }
   if (how) *how = 2;
   return FitInside(right, area);
+}
+
+// Candidate cells in client coordinates. widths: each item's text width; lineH: row height.
+// pad/gap mirror the painter (x pad, y pad, gap between horizontal items / columns). maxW/maxH:
+// the room the panel has (pass a huge value for the natural size). A vertical list that does not
+// fit in maxH wraps into further columns; a horizontal row that does not fit in maxW wraps into
+// further rows, so every candidate stays visible and clickable when the panel is shrunk (Mac
+// review 2026-11-06 P2: shrinking only the window clipped later choices). *outW/*outH: panel size.
+inline std::vector<Rect> LayoutCells(const std::vector<int> &widths, int lineH, bool vertical, int maxW, int maxH,
+                                     int padX, int padY, int gapX, int *outW, int *outH) {
+  std::vector<Rect> cells;
+  const int n = (int)widths.size();
+  if (n == 0) { *outW = 2 * padX; *outH = 2 * padY; return cells; }
+  if (vertical) {
+    int maxw = 0;
+    for (int w : widths) maxw = maxw > w ? maxw : w;
+    int rows = n;
+    if (2 * padY + rows * lineH > maxH) rows = (maxH - 2 * padY) / lineH;
+    if (rows < 1) rows = 1;
+    const int cols = (n + rows - 1) / rows;
+    rows = (n + cols - 1) / cols;  // balance the columns
+    for (int i = 0; i < n; ++i) {
+      const int c = i / rows, r = i % rows;
+      const int x = padX + c * (maxw + gapX), y = padY + r * lineH;
+      cells.push_back(Rect{x, y, x + maxw, y + lineH});
+    }
+    *outW = 2 * padX + cols * maxw + (cols - 1) * gapX;
+    *outH = 2 * padY + rows * lineH;
+    return cells;
+  }
+  int x = padX, y = padY, right = padX;
+  for (int i = 0; i < n; ++i) {
+    const int w = widths[i] + gapX;
+    if (x > padX && x + w + padX > maxW) { x = padX; y += lineH; }  // wrap, never an empty row
+    cells.push_back(Rect{x, y, x + w, y + lineH});
+    x += w;
+    right = right > x ? right : x;
+  }
+  *outW = right + padX;
+  *outH = y + lineH + padY;
+  return cells;
 }
 
 }  // namespace kx
