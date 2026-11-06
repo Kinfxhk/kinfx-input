@@ -9,6 +9,7 @@
 #include "chord.h"
 #include "core.h"
 #include "display-caret.h"
+#include "cand-place.h"
 #include "caret-origin.h"
 #include "langbar.h"
 
@@ -141,22 +142,28 @@ class CandWin {
     MONITORINFO mi = {sizeof mi};
     if (GetMonitorInfoW(MonitorFromPoint(at, MONITOR_DEFAULTTONEAREST), &mi)) {
       RECT wa = mi.rcWork;
-      // A tall vertical list hanging below the caret covers the next input of Qt/Electron forms,
-      // whose fields are not separate windows, and a click meant for that field picks a candidate
-      // instead (x46: "vd" + click lower field -> upper field "妹好", lower field never focused).
-      // Prefer the space above the text line when the whole list fits there. When it fits neither
-      // above nor below, the list used to be pushed to the top edge, over the text line and
-      // whatever lies under it. In that case, and when only the space below is free, show a single
-      // row under the caret instead of a tall column; mouse selection stays the same.
-      if (vertical_ && items_.size() > 1 && at.y - lineAbove - 4 - wh < wa.top) {
-        vertical_ = false;
+      // A tall vertical list below the caret reaches the next input of Qt/Electron forms, whose
+      // fields are not separate windows: a click meant for that field picks a candidate instead
+      // (x46: "vd" + click lower field -> upper field "妹好", lower field never focused). Tall
+      // lists go above the text line when they fit; short ones stay below. A list that fits
+      // neither way becomes one row, and it never covers the line being typed.
+      const kx::Rect area{wa.left, wa.top, wa.right, wa.bottom};
+      const kx::Rect caretLine{at.x, at.y - 2 - lineAbove, at.x + 8, at.y - 2};
+      const bool fitsAbove = caretLine.top - 2 - wh >= area.top;
+      const bool fitsBelow = caretLine.bottom + 2 + wh <= area.bottom;
+      if (vertical_ && items_.size() > 1 && !fitsAbove && !fitsBelow) {
+        vertical_ = false;  // neither column direction fits: one row instead of spilling
         measure();
       }
-      const int above = at.y - lineAbove - 4 - wh;  // bottom edge just over the text line
-      if (vertical_ && items_.size() > 1 && above >= wa.top) at.y = above;
-      if (at.y + wh > wa.bottom) at.y = max(wa.top, above);  // no room below: above the text line
-      if (at.x + ww > wa.right) at.x = max(wa.left, wa.right - ww);
-      if (at.x < wa.left) at.x = wa.left;
+      POINT at2 = at;
+      int how = -1;
+      kx::Rect placed = kx::PlaceCandidate(caretLine, ww, wh, area, 2,
+                                           vertical_ && items_.size() >= 5, &how);
+      at2.x = placed.left;
+      at2.y = placed.top;
+      at = at2;
+      Trace("cand place=" + std::to_string(how) + " at=" + std::to_string(at.x) + "," + std::to_string(at.y) +
+            " wh=" + std::to_string(ww) + "x" + std::to_string(wh));
     }
     SetWindowPos(hwnd_, HWND_TOPMOST, at.x, at.y, ww, wh, SWP_NOACTIVATE | SWP_SHOWWINDOW);
     // Some hosts (WebView2 panels such as Raycast's search, browser popups) hide their window
@@ -482,7 +489,9 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
         bool outside = FAILED(range->CompareStart(ec, sel.range, TF_ANCHOR_START, &start)) ||
                        FAILED(range->CompareEnd(ec, sel.range, TF_ANCHOR_END, &end)) || start > 0 || end < 0;
         range->Release();
-        if (outside && generation == generation_ && Same(composition.get(), comp_)) Blur();
+        // OnEndEdit runs while the app still holds the document lock: a TF_ES_SYNC request is
+        // refused here (TF_E_LOCKED/TF_E_SYNCHRONOUS) and the preedit would stay behind.
+        if (outside && generation == generation_ && Same(composition.get(), comp_)) Blur(false, 0, true);
       }
       sel.range->Release();
     }
@@ -514,7 +523,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     cand_.Hide(true);
   }
 
-  void Blur(bool terminated = false, TfEditCookie ec = 0) {
+  void Blur(bool terminated = false, TfEditCookie ec = 0, bool deferred = false) {
     // Detach BEFORE requesting a lock/ending a composition: TSF can reenter any sink here.
     auto composition = Adopt(comp_);
     auto context = Adopt(owner_);
@@ -530,11 +539,16 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     const auto generation = generation_ + 1;
     ResetInput();
     if (generation != generation_ || !composition || !context) return;
-    // Synchronous only: a delayed range can follow a reused context into another field.
+    // Synchronous by default: a delayed range can follow a reused context into another field.
+    // Only the in-field caret move (OnEndEdit, lock still held) defers; that write is bound to
+    // this blur's generation and its own composition object, so any later focus/context change
+    // (EnsureContext -> Blur -> ResetInput) cancels it instead of writing into the wrong field.
     // If the write lock fails, leave the existing document preedit untouched. The host owns
     // its eventual termination; the F35 conversion is not guaranteed in that case.
-    auto finish = [this, composition, context, commit, terminated, generation](TfEditCookie cookie) {
+    AddRef(); auto lifetime = Adopt(static_cast<ITfTextInputProcessorEx *>(this));
+    auto finish = [this, lifetime, composition, context, commit, terminated, generation, deferred](TfEditCookie cookie) {
       if (generation != generation_) return;
+      if (deferred && (comp_ && Same(composition.get(), comp_))) return;  // re-adopted: not ours to end
       ITfRange *range = nullptr;
       if (!commit.empty() && SUCCEEDED(composition->GetRange(&range)) && range) {
         if (generation == generation_)
@@ -546,7 +560,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     if (terminated) { finish(ec); return; }
     auto *edit = new EditSession(finish);
     HRESULT result = E_FAIL;
-    HRESULT request = context->RequestEditSession(id_, edit, TF_ES_SYNC | TF_ES_READWRITE, &result);
+    HRESULT request = context->RequestEditSession(id_, edit, (deferred ? TF_ES_ASYNC : TF_ES_SYNC) | TF_ES_READWRITE, &result);
     Trace("blur owner request=" + std::to_string((long)request) + " result=" + std::to_string((long)result));
     edit->Release();
   }
@@ -630,13 +644,11 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
       if (same) return pendEaten_;
     }
     int sym = KeySym(w, l), mask = Mask();
-    // Tab/Shift+Tab belong to the host, not Rime's candidate navigation. Finish
-    // pending text with the existing raw blur policy before focus can move;
-    // returning false in OnTestKeyDown means OnKeyDown need not be dispatched.
-    if (sym == 0xff09 && !(mask & (kControl | kAlt))) {
-      if (!up) Blur();
-      return false;
-    }
+    // Tab is the shared "expand" key (Linux/macOS behave the same): with an open composition it
+    // goes to Rime, where win_quick toggles the multi-column list and the text stays in preedit
+    // in the same field. With nothing composing Rime does not eat it, so the host still gets its
+    // own Tab/Shift+Tab focus navigation. Focus leaving the field commits through Blur as usual.
+    if (sym == 0xff09 && !comp_ && !(mask & (kControl | kAlt))) return false;
     bool modKey = sym >= 0xffe1 && sym <= 0xffe2;
     // Shortcuts with Ctrl/Alt go to the app; Shift taps reach Rime (english_mix).
     // Ctrl+V while a preedit shows goes to Rime first (0.1.2): held top-outs commit, letters drop, app pastes.

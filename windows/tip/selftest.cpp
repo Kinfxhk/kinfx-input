@@ -87,33 +87,71 @@ int main() {
   kx_destroy(s);
   Check("iPhone Space", Type("iPhone "), "iPhone ");
   // 0.1.8 punctuation: one key = one glyph and no candidate menu, so nothing ever asks the user to
-  // pick 全形/半形. Cands() must stay 0 for every key.
+  // pick 全形/半形. The shipped default is full shape (schema `full_shape reset: 1`), so the ASCII
+  // keys must produce the 全形 table from engine/prelude/punctuation.yaml; Shift+Space switches to
+  // 半形 and the same keys must give plain ASCII again (code and URLs must not break).
   {
     struct P { const char *keys; const wchar_t *want; };
-    static const P half[] = {
-        {",", L","}, {".", L"."}, {"?", L"?"}, {"!", L"!"}, {";", L";"}, {":", L":"},
-        {"(", L"("}, {")", L")"}, {"[", L"["}, {"]", L"]"}, {"{", L"{"}, {"}", L"}"},
-        {"<", L"<"}, {">", L">"}, {"\\", L"\\"}, {"''", L"''"}, {"\"\"", L"\"\""},
-        {"/", L"/"}, {"-", L"-"}, {"_", L"_"}, {"+", L"+"}, {"=", L"="}, {"~", L"~"},
-        {"$", L"$"}, {"%", L"%"}, {"@", L"@"}, {"#", L"#"}, {"^", L"^"}, {"&", L"&"},
-        {"*", L"*"}, {"|", L"|"}, {"`", L"`"},
+    static const P full[] = {
+        {" ", L"　"},
+        {",", L"，"},
+        {".", L"。"},
+        {"?", L"？"},
+        {"!", L"！"},
+        {";", L"；"},
+        {":", L"："},
+        {"(", L"（"},
+        {")", L"）"},
+        {"[", L"「"},
+        {"]", L"」"},
+        {"{", L"『"},
+        {"}", L"』"},
+        {"<", L"《"},
+        {">", L"》"},
+        {"\\", L"、"},
+        {"''", L"‘’"},
+        {"\"\"", L"“”"},
+        // Leading slash in a fresh ASCII context is a command leader (/init): half-width
+        // (shared contract, english_mix.lua); after CJK it follows full_shape.
+        {"/", L"/"},
+        {"-", L"－"},
+        {"_", L"＿"},
+        {"+", L"＋"},
+        {"=", L"＝"},
+        {"~", L"～"},
+        {"$", L"＄"},
+        {"%", L"％"},
+        {"@", L"＠"},
+        {"#", L"＃"},
+        {"^", L"＾"},
+        {"&", L"＆"},
+        {"*", L"＊"},
+        {"|", L"｜"},
+        {"`", L"｀"},
     };
     std::string bad;
-    for (const P &p : half) {
+    for (const P &p : full) {
       int c = 0;
       std::string out = Type(p.keys, &c);
       if (out != kx::Utf8(p.want) || c) bad += std::string(p.keys) + "=" + out + "/" + std::to_string(c) + " ";
     }
-    Check("punct half: one glyph, no menu", bad.empty() ? "ok" : bad, "ok");
-    // Shift+Space toggles full shape: the same keys give full-width glyphs, and toggling back
-    // gives ASCII again (code/URLs must not break).
+    Check("punct full (default): one glyph, no menu", bad.empty() ? "ok" : bad, "ok");
     s = kx_session("kinfx_quick");
     std::string shape;
-    Check("Shift+Space eaten", std::to_string(kx_key(s, 0x20, 1)), "1");
+    Check("Shift+Space eaten", std::to_string(kx_key(s, 0x20, 1)), "1");  // full -> half
     for (const char *k : {",", "/", "-", "*"}) { kx_key(s, *k, 0); shape += Take(s); }
-    kx_key(s, 0x20, 1);
-    for (const char *k : {"/", "*"}) { kx_key(s, *k, 0); shape += Take(s); }
-    Check("full_shape, then half again", shape, kx::Utf8(L"，／－＊/*"));
+    kx_key(s, 0x20, 1);  // half -> full
+    // A slash is not used here: a leading slash stays half-width by contract (/init), and the
+    // half row leaves a Latin punctuation tail that is the shared owner's to define.
+    // Punctuation straight after half punctuation keeps that Latin tail (shared english_mix), so
+    // the full row is proved after Chinese, the same vector as tools/test-contextual-punctuation.py.
+    for (const char *k : {"v", "d", "1", ","}) { kx_key(s, *k, 0); shape += Take(s); }
+    Check("half shape, then full again", shape, ",/-*\xe5\xa5\xbd\xef\xbc\x8c");
+    kx_destroy(s);
+    // Diagnostic for the shared owner (not a Windows gate): handoff says 好／ after CJK.
+    s = kx_session("kinfx_quick");
+    for (const char *k : {"v", "d", "1", "/"}) kx_key(s, *k, 0);
+    std::printf("INFO shared: vd1 then '/' -> [%s] (handoff contract 好／)\n", Take(s).c_str());
     kx_destroy(s);
   }
   for (auto cw : {std::pair<const char *, const char *>{"vdhel", "\xe5\xa5\xbd\xe5\x8f\x8d"}, {"vd", ""}}) {
@@ -126,9 +164,10 @@ int main() {
     Check(std::string(code) + " Ctrl+V commits held, app pastes", out + "/" + std::to_string(eaten), std::string(want) + "/0");
     kx_destroy(s);
   }
-  // 0.1.4 blur (F35 from OnCompositionTerminated): what was typed stays.
-  for (auto cw : {std::pair<const char *, const char *>{"hel", "hel"}, {"vdhel", "vdhel"}, {"vd", "\xe5\xa5\xbd"},
-                  {"vd1hel", "\xe5\xa5\xbdhel"}, {"ofca", "ofca"}, {"he", "\xe5\x8f\x8d"}}) {
+  // 0.1.4 blur (F35 from OnCompositionTerminated): what was typed stays. Shared default
+  // english/blur_short=letters keeps a 1-2 letter run as letters (same rows as mac/linux selftest).
+  for (auto cw : {std::pair<const char *, const char *>{"hel", "hel"}, {"vdhel", "vdhel"}, {"vd", "vd"},
+                  {"vd1hel", "\xe5\xa5\xbdhel"}, {"ofca", "ofca"}, {"he", "he"}}) {
     s = kx_session("kinfx_quick");
     std::string out;
     for (const char *k = cw.first; *k; k++) { kx_key(s, *k, 0); out += Take(s); }
@@ -139,7 +178,8 @@ int main() {
     kx_destroy(s);
   }
   // 0.1.6 Chinese/English switch: Control+space toggles ascii_mode (key_binder).
-  // In ascii mode Rime rejects the letters so the app types them; back in Chinese they compose.
+  // Fix A (locked): in ascii mode english_mix eats a letter and commits it half-width (v, never
+  // ｖ even under full_shape), so the shell inserts it; back in Chinese they compose.
   {
     uintptr_t t = kx_session("kinfx_quick");
     int on = kx_key(t, 0x20, 4);
@@ -148,7 +188,7 @@ int main() {
     std::string out;
     for (char k : std::string("vd1")) { kx_key(t, k, 0); out += Take(t); }
     Check("Control+space toggles ascii_mode", std::to_string(on) + "/" + std::to_string(pass) + "/" +
-                                                 std::to_string(off) + "/" + out, "1/0/1/\xe5\xa5\xbd");
+                                                 std::to_string(off) + "/" + out, "1/1/1/v\xe5\xa5\xbd");
     kx_destroy(t);
   }
   // A live composition is closed before the toggle (the shell's sequence): Return commits the
@@ -162,7 +202,10 @@ int main() {
     kx_key(t, 0xff1b, 0);
     kx_key(t, 0x20, 4);
     int v = kx_key(t, 'v', 0), d = kx_key(t, 'd', 0);
-    Check("preedit commit then toggle", out + "/" + std::to_string(v) + std::to_string(d), "\xe5\xa5\xbd/00");
+    std::string typed = Take(t);
+    // No letter swallowed: both are committed as half-width ASCII (Fix A).
+    Check("preedit commit then toggle", out + "/" + std::to_string(v) + std::to_string(d) + "/" + typed,
+          "\xe5\xa5\xbd/11/vd");
     kx_destroy(t);
   }
   // The mode hint reads ascii_mode back to know 中 vs 英: a wrong read would mislabel the switch.

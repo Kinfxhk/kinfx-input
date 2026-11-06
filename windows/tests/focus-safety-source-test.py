@@ -8,9 +8,18 @@ def method(name, next_name):
     return SOURCE.split(name, 1)[1].split(next_name, 1)[0]
 
 class FocusSafetySourceTests(unittest.TestCase):
-    def test_blur_has_no_deferred_write_and_preserves_empty_commit(self):
+    def test_blur_defers_only_for_end_edit_and_preserves_empty_commit(self):
+        # Contract change (Mac review P1, 2026-11-06): OnEndEdit holds the app's lock, so a
+        # synchronous blur there is refused. Only that caller may defer; the deferred write is
+        # bound to its generation so a later focus change cancels it. Focus changes stay sync.
         blur = method("  void Blur(", "  void TrackContext(")
-        self.assertNotIn("TF_ES_ASYNC", blur)
+        self.assertIn("(deferred ? TF_ES_ASYNC : TF_ES_SYNC) | TF_ES_READWRITE", blur)
+        finish = blur.split("auto finish =", 1)[1].split("};", 1)[0]
+        self.assertTrue(finish.lstrip().split("\n", 1)[1].strip().startswith("if (generation != generation_) return;"))
+        self.assertIn("lifetime", finish.split("\n", 1)[0])
+        self.assertEqual(SOURCE.count(", true);  // deferred") + SOURCE.count("Blur(false, 0, true)"), 1)
+        end_edit = method("  STDMETHODIMP OnEndEdit(", "\n private:")
+        self.assertIn("Blur(false, 0, true)", end_edit)
         self.assertIn("!commit.empty()", blur)
         self.assertIn("generation != generation_", blur)
         finish = blur.split("auto finish =", 1)[1]
