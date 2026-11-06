@@ -12,7 +12,16 @@
 
 HINSTANCE g_hinst;
 extern "C" int __stdcall KxDeploy();
-static int fails = 0;
+static int fails = 0, gaps = 0;
+
+// A contract vector the shared engine does not meet yet (Hermes owns the fix). It is not a PASS and
+// not hidden as INFO: it prints GAP, counts in the summary, and turns into PASS by itself once the
+// shared fix lands. It does not fail the Windows gate, because Windows must not change shared Lua.
+static void Gap(const std::string &name, const std::string &got, const std::string &want) {
+  bool ok = got == want;
+  gaps += !ok;
+  printf("%s %s: got [%s] want [%s]\n", ok ? "PASS" : "GAP(shared, open)", name.c_str(), got.c_str(), want.c_str());
+}
 
 static void Check(const std::string &name, const std::string &got, const std::string &want) {
   bool ok = got == want;
@@ -148,11 +157,19 @@ int main() {
     for (const char *k : {"v", "d", "1", ","}) { kx_key(s, *k, 0); shape += Take(s); }
     Check("half shape, then full again", shape, ",/-*\xe5\xa5\xbd\xef\xbc\x8c");
     kx_destroy(s);
-    // Diagnostic for the shared owner (not a Windows gate): handoff says 好／ after CJK.
-    s = kx_session("kinfx_quick");
-    for (const char *k : {"v", "d", "1", "/"}) kx_key(s, *k, 0);
-    std::printf("INFO shared: vd1 then '/' -> [%s] (handoff contract 好／)\n", Take(s).c_str());
-    kx_destroy(s);
+    // Handoff contract vectors the shared engine owns. Reported as GAP until the shared fix lands.
+    auto run = [&](std::initializer_list<const char *> keys) {
+      uintptr_t g = kx_session("kinfx_quick");
+      std::string out;
+      for (const char *k : keys) { kx_key(g, *k == ' ' ? 0x20 : *k, 0); out += Take(g); }
+      kx_key(g, 0xff0d, 0);  // Return flushes a held tail
+      out += Take(g);
+      kx_destroy(g);
+      return out;
+    };
+    Gap("shared: vd1 then '/' after CJK", run({"v", "d", "1", "/"}), "\xe5\xa5\xbd\xef\xbc\x8f");
+    Gap("shared: 'hello. ' keeps ASCII space", run({"h", "e", "l", "l", "o", ".", " "}), "hello. ");
+    Gap("shared: '60cm ' keeps ASCII space", run({"6", "0", "c", "m", " "}), "60cm ");
   }
   for (auto cw : {std::pair<const char *, const char *>{"vdhel", "\xe5\xa5\xbd\xe5\x8f\x8d"}, {"vd", ""}}) {
     const char *code = cw.first, *want = cw.second;
@@ -357,6 +374,7 @@ int main() {
     auto v = kx::Load(kx::UserDir() + L"\\bad.json");
     return v["page_size"] + "/" + v["english_space"];
   }(), "9/long");
-  printf(fails ? "%d FAIL\n" : "ALL PASS\n", fails);
+  if (gaps) printf("%d SHARED GAP (open, owned by the shared engine; not a pass)\n", gaps);
+  printf(fails ? "%d FAIL\n" : "ALL PASS (Windows)\n", fails);
   return fails ? 1 : 0;
 }
