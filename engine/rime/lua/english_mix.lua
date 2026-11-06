@@ -707,7 +707,10 @@ local function init(env)
         c:set_property("kinfx_punct_tail", "")
         c:set_property("kinfx_digit_tail", "")
       end
-      env.punct_committing = false
+      -- Do not consume punct_committing here: a single commit fires more than
+      -- one update_notifier (commit clear + engine post-key update). Resetting
+      -- on the first would let the second clear the just-set tail (CJK 好 then
+      -- "/" -> 好/ instead of 好／). The flag is reset at the next key instead.
     end
   end)
   -- 0.1.4: kinfx_blur (what F35 would commit) is kept up to date for shells
@@ -1810,6 +1813,10 @@ end
 return {
   processor = { init = init, fini = fini, func = function(key, env)
     activate(env)
+    -- Consume the one-shot commit guard at the next key: the commit's own
+    -- update_notifier(s) already ran inside the previous key, so the tail it
+    -- set (CJK -> 'other') must survive them and only reset here.
+    env.punct_committing = false
     local ctx = env.engine.context
     -- Native ascii_composer rejects idle letters, but full_shape's postprocessor
     -- may still sink them (without commit_notifier). Observe only that literal
