@@ -184,7 +184,9 @@ class Engine:
                 v = f.read().strip()
         except FileNotFoundError:
             return
-        except OSError:
+        except (UnicodeError, OSError):
+            # UnicodeError = malformed (non-ASCII) bytes like 0xff 0xfe; OSError =
+            # unreadable (permission). Both fail-closed, never silent persistence.
             self.full_shape_error = "unreadable"
             return
         if v == "1":

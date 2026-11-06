@@ -55,6 +55,9 @@ def _run_scenario(kind):
         with open(state_path, "w", encoding="ascii") as f:
             f.write("1\n")
         os.chmod(state_path, 0o000)
+    elif kind == "state-malformed":
+        with open(state_path, "wb") as f:
+            f.write(b"\xff\xfe")
 
     e = kxcore.Engine(share, user)
     assert e.start(), "kx_start failed"
@@ -129,6 +132,10 @@ def _run_scenario(kind):
             check(e.full_shape_error == "unreadable" and e.full_shape == 0,
                   "unreadable-state-file-fails-closed-to-half",
                   error=e.full_shape_error, global_width=e.full_shape)
+        elif kind == "state-malformed":
+            check(e.full_shape_error == "unreadable" and e.full_shape == 0,
+                  "malformed-state-file-fails-closed-to-half",
+                  error=e.full_shape_error, global_width=e.full_shape)
         elif kind == "state-unwritable":
             a = e.session()
             b = e.session()
@@ -198,6 +205,9 @@ class FullShapeGlobal(unittest.TestCase):
 
     def test_unreadable_state_file_fails_closed(self):
         self._assert_green("state-unreadable")
+
+    def test_malformed_state_file_fails_closed(self):
+        self._assert_green("state-malformed")
 
     def test_unwritable_state_file_fails_closed(self):
         self._assert_green("state-unwritable")
