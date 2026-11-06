@@ -532,6 +532,8 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     auto composition = Adopt(comp_);
     auto context = Adopt(owner_);
     comp_ = nullptr; owner_ = nullptr;
+    const std::wstring shown = shownPre_;
+    shownPre_.clear();
     std::wstring commit;
     if (sess_) {
       kx_key(sess_, 0xffe0, 0);  // existing F35 blur policy, not a new candidate/space policy
@@ -561,7 +563,12 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
       }
       if (!terminated && generation == generation_) composition->EndComposition(cookie);
     };
-    if (terminated) { finish(ec); return; }
+    // The app ended the composition itself (Chromium/Electron finalizes the preedit on blur and
+    // keeps it). When the blur result is exactly that preedit, the document already holds it:
+    // writing it again from the termination callback lands in the newly focused field because
+    // Chromium uses one text store per window.
+    if (terminated && commit == shown) { Trace("blur terminated: app kept preedit, no write"); return; }
+    if (terminated) { Trace("blur terminated: write commit"); finish(ec); return; }
     auto *edit = new EditSession(finish);
     HRESULT result = E_FAIL;
     HRESULT request = context->RequestEditSession(id_, edit, (deferred ? TF_ES_ASYNC : TF_ES_SYNC) | TF_ES_READWRITE, &result);
@@ -893,6 +900,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     ITfRange *r = nullptr;
     if (FAILED(composition->GetRange(&r)) || !r) return;
     r->SetText(ec, 0, pre.c_str(), (LONG)pre.size());
+    shownPre_ = pre;
     if (generation != generation_ || !Same(composition.get(), comp_)) { r->Release(); return; }
     ITfRange *caret = nullptr;
     if (SUCCEEDED(r->Clone(&caret)) && caret) {
@@ -981,6 +989,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     auto composition = Adopt(comp_);
     auto context = Adopt(owner_);
     comp_ = nullptr; owner_ = nullptr;
+    shownPre_.clear();
     if (composition) composition->EndComposition(ec);
   }
 
@@ -998,6 +1007,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   uintptr_t sess_ = 0;
   ITfComposition *comp_ = nullptr;
   ITfContext *owner_ = nullptr;  // the ONLY context whose edit cookie can touch comp_'s range
+  std::wstring shownPre_;  // preedit last written into comp_'s range
   ITfContext *focus_ = nullptr;
   ITfContextView *view_ = nullptr;
   HWND focusHwnd_ = nullptr, viewHwnd_ = nullptr;
