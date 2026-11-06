@@ -10,17 +10,26 @@ class ChtHotkey(unittest.TestCase):
         body = CORE.split('void TakeOverHotkeys() {', 1)[1].split('\nbool RestoreHotkeys', 1)[0]
         self.assertIn('kChtToggle = 0x70', CORE)
         self.assertIn('ImmSetHotKey', CORE)
-        self.assertIn('ChtSet(0, 0)', body)
+        self.assertIn('if (set && ChtBackupValid(cb)) ChtSet(0, 0);', body)
 
     def test_backup_written_once(self):
         body = CORE.split('void TakeOverHotkeys() {', 1)[1].split('\nbool RestoreHotkeys', 1)[0]
         self.assertIn('hotkeys-backup-cht.json', CORE)
-        self.assertIn('GetFileAttributesW(cb.c_str()) == INVALID_FILE_ATTRIBUTES', body)
+        # Mac review P1: the binding is cleared only after the backup reads back valid.
+        self.assertIn('if (set && !ChtBackupValid(cb))', body)
+        self.assertLess(body.index('WriteIfChanged(cb, json)'), body.index('ChtSet(0, 0)'))
+        self.assertIn('if (!HotkeyBackupValid(b)) return;', body)
 
     def test_restore_puts_original_back(self):
         body = CORE.split('bool RestoreHotkeys() {', 1)[1]
-        self.assertIn('ChtSet((UINT)std::stoul(a[1]), (UINT)std::stoul(b[1]))', body)
-        self.assertIn('DeleteFileW(ChtHotkeyBackup().c_str())', body)
+        self.assertIn('ChtSet(wm, wv);', body)
+        # A backup is deleted only after the live values read back equal to it.
+        self.assertIn('if (ChtGet(&lm, &lv) && lm == wm && lv == wv) DeleteFileW(ChtHotkeyBackup().c_str());', body)
+        self.assertIn('if (live) DeleteFileW(HotkeyBackup().c_str());', body)
+        self.assertIn('return any && ok;', body)
+
+    def test_selftest_never_takes_over_from_start(self):
+        self.assertEqual(CORE.count('if (!SelfTest()) TakeOverHotkeys();'), 2)
 
 
 if __name__ == '__main__':

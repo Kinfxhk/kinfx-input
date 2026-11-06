@@ -476,7 +476,9 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   STDMETHODIMP OnEndEdit(ITfContext *c, TfEditCookie ec, ITfEditRecord *record) override {
     if (writing_ || !Same(c, focus_)) return S_OK;
     const auto generation = generation_;
-    EnsureContext(c);
+    // Every edit OnEndEdit triggers must be async (the app still holds the lock; MS docs for
+    // ITfTextEditSink::OnEndEdit). That includes the blur a view/HWND change makes EnsureContext do.
+    EnsureContext(c, true);
     if (generation != generation_ || !Same(c, focus_)) return S_OK;
     BOOL changed = FALSE;
     if (!comp_ || !Same(c, owner_)) return S_OK;
@@ -578,15 +580,21 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
 
   void TrackContext(ITfContext *c) {
     if (Same(c, focus_)) return;
-    if (focus_) {
+    // Detach the members before UnadviseSink: TSF may reenter a sink there, and a nested
+    // TrackContext must not see (and release) the context this call is about to drop.
+    ITfContext *old = focus_;
+    const DWORD oldCookie = editCookie_;
+    focus_ = nullptr; editCookie_ = TF_INVALID_COOKIE;
+    if (old) {
       ITfSource *source = nullptr;
-      if (editCookie_ != TF_INVALID_COOKIE && SUCCEEDED(focus_->QueryInterface(IID_ITfSource, (void **)&source))) {
-        source->UnadviseSink(editCookie_);
+      if (oldCookie != TF_INVALID_COOKIE && SUCCEEDED(old->QueryInterface(IID_ITfSource, (void **)&source))) {
+        source->UnadviseSink(oldCookie);
         source->Release();
       }
-      focus_->Release();
+      old->Release();
     }
-    focus_ = c; editCookie_ = TF_INVALID_COOKIE;
+    if (focus_) return;  // a reentrant transition already installed the newer context
+    focus_ = c;
     if (view_) { view_->Release(); view_ = nullptr; }
     focusHwnd_ = nullptr; viewHwnd_ = nullptr;
     if (focus_) {
@@ -599,7 +607,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     }
   }
 
-  void EnsureContext(ITfContext *c) {
+  void EnsureContext(ITfContext *c, bool fromEndEdit = false) {
     const auto generation = generation_;
     ITfContextView *view = nullptr;
     HWND hwnd = GetFocus(), viewHwnd = nullptr;
@@ -609,7 +617,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
                    (viewHwnd_ && viewHwnd && viewHwnd_ != viewHwnd) ||
                    (view_ && view && !Same(view_, view));
     Trace("ensure ctx=" + std::to_string((uintptr_t)c) + " focus=" + std::to_string((uintptr_t)focus_) + " hwnd=" + std::to_string((uintptr_t)hwnd) + " prev=" + std::to_string((uintptr_t)focusHwnd_) + " changed=" + std::to_string(changed));
-    if (changed) Blur();
+    if (changed) Blur(false, 0, fromEndEdit);
     // Blur resets once; any further reset means a nested focus transition won.
     const auto expected = generation + (changed ? 1 : 0);
     if (generation_ != expected) { if (view) view->Release(); return; }
@@ -683,7 +691,8 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
       // schema resets full_shape), must not flip it back. Apply before the key, publish after.
       if (kx::ApplyShape(sess_)) Trace("shape applied");
       eaten = kx_key(sess_, sym, m | (up ? kRelease : 0)) != 0;
-      if (kx::NoteShape(sess_)) Trace("shape held");
+      // key_bindings: Shift+space toggles full_shape (the Ctrl chords never reach Rime here).
+      if (kx::NoteShape(sess_, sym == 0x20 && (m & kShift) && !up)) Trace("shape held");
       Trace("key sym=" + std::to_string(sym) + " m=" + std::to_string(m) + (up ? " up" : "") + " eaten=" + (eaten ? "1" : "0"));
       pending_ = true; pendW_ = w; pendUp_ = up; pendEaten_ = eaten;
     }
@@ -833,7 +842,29 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     HRESULT request = c->RequestEditSession(id_, es, TF_ES_SYNC | TF_ES_READWRITE, &hr);
     es->Release();
     if (generation != generation_) return;
-    if (FAILED(request) || FAILED(hr)) { cand_.Hide(true); return; }
+    if (FAILED(request) || FAILED(hr)) {
+      // The engine already gave up this commit (kx_take_commit). A refused sync lock — reachable from
+      // a mouse pick, which is not a keystroke — must not drop it: queue the same write async, bound
+      // to this generation and context so a later focus change cancels it instead of misplacing it.
+      if (!commit.empty()) {
+        AddRef(); auto lifetime = Adopt(static_cast<ITfTextInputProcessorEx *>(this));
+        c->AddRef(); auto ctxRef = Adopt(c);
+        auto *later = new EditSession([this, lifetime, ctxRef, commit, pre, preCaret, generation](TfEditCookie ec) {
+          if (generation != generation_ || !Same(ctxRef.get(), focus_)) return;
+          POINT p = {-1, -1}; int lh = 0;
+          ++writing_;
+          Write(ec, ctxRef.get(), commit, pre, preCaret, &p, &lh, generation);
+          --writing_;
+        });
+        HRESULT hr2 = E_FAIL;
+        HRESULT r2 = c->RequestEditSession(id_, later, TF_ES_ASYNC | TF_ES_READWRITE, &hr2);
+        later->Release();
+        Trace("update sync refused request=" + std::to_string((long)request) + " hr=" + std::to_string((long)hr) +
+              " async=" + std::to_string((long)r2));
+      }
+      cand_.Hide(true);
+      return;
+    }
     if (cands.empty()) { cand_.Hide(); return; }
     if (at.x < 0 && last_.x >= 0) { at = last_; lineH = lastH_; }  // TSF gave no extent: stay where the preedit was
     if (at.x < 0) at = CaretAt(&lineH);
@@ -903,9 +934,10 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     auto composition = Adopt(comp_);
     ITfRange *r = nullptr;
     if (FAILED(composition->GetRange(&r)) || !r) return;
-    r->SetText(ec, 0, pre.c_str(), (LONG)pre.size());
-    shownPre_ = pre;
+    const HRESULT set = r->SetText(ec, 0, pre.c_str(), (LONG)pre.size());
     if (generation != generation_ || !Same(composition.get(), comp_)) { r->Release(); return; }
+    // Only a preedit the document really holds, for the composition still ours, may suppress a blur write.
+    if (SUCCEEDED(set)) shownPre_ = pre;
     ITfRange *caret = nullptr;
     if (SUCCEEDED(r->Clone(&caret)) && caret) {
       LONG shifted = 0;

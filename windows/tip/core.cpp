@@ -112,6 +112,10 @@ static FILETIME Stamp(const std::wstring &path) {
 static const wchar_t *kHotKeys = L"Control Panel\\Input Method\\Hot Keys\\00000010";
 static const wchar_t *kToggle = L"Keyboard Layout\\Toggle";
 
+// The self-test (build.cmd sets KX_USER) must not leave global side effects: Start/Reload skip the
+// hotkey takeover there and the shape lock uses a private cell (Mac review 2026-11-06, P1).
+static bool SelfTest() { return GetEnvironmentVariableW(L"KX_USER", nullptr, 0) != 0; }
+
 std::wstring HotkeyBackup() { return UserDir() + L"\\hotkeys-backup.json"; }
 
 // -1 when the value is absent (restore then removes it again). The window hotkey is REG_BINARY (a
@@ -182,20 +186,37 @@ static bool ChtSet(UINT mod, UINT vk) {
   return f && f(kChtToggle, mod, vk, nullptr);
 }
 
+static const std::regex kChtMod("\"cht_modifiers\"\\s*:\\s*([0-9]+)"), kChtVk("\"cht_virtual_key\"\\s*:\\s*([0-9]+)");
+
+// A backup is usable only when it reads back with the fields restore needs. Takeover clears a binding
+// only after that holds: a failed or truncated write must never leave the user's original unrecoverable
+// (Mac review 2026-11-06, P1).
+static bool ChtBackupValid(const std::wstring &path) {
+  std::string t = ReadAll(path);
+  std::smatch a, b;
+  return std::regex_search(t, a, kChtMod) && std::regex_search(t, b, kChtVk);
+}
+static bool HotkeyBackupValid(const std::wstring &path) {
+  std::string t = ReadAll(path);
+  for (auto k : {"\"modifiers\"", "\"virtual_key\"", "\"language_hotkey\"", "\"layout_hotkey\""})
+    if (t.find(k) == std::string::npos) return false;
+  return true;
+}
+
 void TakeOverHotkeys() {
   {
     UINT mod = 0, vk = 0;
     bool set = ChtGet(&mod, &vk) && vk;
     std::wstring cb = ChtHotkeyBackup();
-    if (set && GetFileAttributesW(cb.c_str()) == INVALID_FILE_ATTRIBUTES) {
+    if (set && !ChtBackupValid(cb)) {  // absent or unreadable: (re)write the live original
       char json[128];
       snprintf(json, sizeof json, "{\n \"cht_modifiers\": %u,\n \"cht_virtual_key\": %u\n}\n", mod, vk);
       WriteIfChanged(cb, json);
     }
-    if (set) ChtSet(0, 0);
+    if (set && ChtBackupValid(cb)) ChtSet(0, 0);  // no verified backup: leave the binding alone
   }
   std::wstring b = HotkeyBackup();
-  if (GetFileAttributesW(b.c_str()) == INVALID_FILE_ATTRIBUTES) {  // an existing backup is the user's original
+  if (!HotkeyBackupValid(b)) {  // an existing valid backup is the user's original
     SYSTEMTIME t;
     GetLocalTime(&t);
     char json[256];
@@ -206,6 +227,7 @@ void TakeOverHotkeys() {
              RegGet(kHotKeys, L"Virtual Key"), RegGet(kToggle, L"Language Hotkey"), RegGet(kToggle, L"Layout Hotkey"));
     WriteIfChanged(b, json);
   }
+  if (!HotkeyBackupValid(b)) return;  // cannot restore later: keep Windows' own bindings
   // 0 modifiers + 0 virtual key = the IME hotkey is unassigned. Language Hotkey 1 = Left Alt+Shift,
   // handed back to Windows (measured: 2 would be Ctrl+Shift, 3 None); Layout Hotkey 3 = None, so
   // Windows never claims the Ctrl+Shift that KINFX uses as its chord.
@@ -216,27 +238,41 @@ void TakeOverHotkeys() {
   if (changed) NotifyInputChanged();
 }
 
+// True only when every backed-up binding is live again. A backup is deleted only after its own values
+// read back from the live state; anything that failed stays on disk for the next restore attempt.
 bool RestoreHotkeys() {
+  bool ok = true, any = false;
   {
     std::string cht = ReadAll(ChtHotkeyBackup());
-    static const std::regex m("\"cht_modifiers\"\\s*:\\s*([0-9]+)"), v("\"cht_virtual_key\"\\s*:\\s*([0-9]+)");
     std::smatch a, b;
-    if (std::regex_search(cht, a, m) && std::regex_search(cht, b, v) &&
-        ChtSet((UINT)std::stoul(a[1]), (UINT)std::stoul(b[1])))
-      DeleteFileW(ChtHotkeyBackup().c_str());
+    if (std::regex_search(cht, a, kChtMod) && std::regex_search(cht, b, kChtVk)) {
+      any = true;
+      UINT wm = (UINT)std::stoul(a[1]), wv = (UINT)std::stoul(b[1]), lm = 0, lv = 0;
+      ChtSet(wm, wv);
+      if (ChtGet(&lm, &lv) && lm == wm && lv == wv) DeleteFileW(ChtHotkeyBackup().c_str());
+      else ok = false;
+    }
   }
   std::string text = ReadAll(HotkeyBackup());
-  if (text.empty()) return false;
-  static const std::regex num("\"([a-z_]+)\"\\s*:\\s*(-?[0-9]+)");
-  std::map<std::string, long> v;
-  for (std::sregex_iterator it(text.begin(), text.end(), num), end; it != end; ++it) v[(*it)[1]] = std::stol((*it)[2]);
-  RegSet(kHotKeys, L"Key Modifiers", v.count("modifiers") ? v["modifiers"] : -1);
-  RegSet(kHotKeys, L"Virtual Key", v.count("virtual_key") ? v["virtual_key"] : -1);
-  RegSet(kToggle, L"Language Hotkey", v.count("language_hotkey") ? v["language_hotkey"] : -1, true);
-  RegSet(kToggle, L"Layout Hotkey", v.count("layout_hotkey") ? v["layout_hotkey"] : -1, true);
-  DeleteFileW(HotkeyBackup().c_str());
-  NotifyInputChanged();
-  return true;
+  if (!text.empty()) {
+    any = true;
+    static const std::regex num("\"([a-z_]+)\"\\s*:\\s*(-?[0-9]+)");
+    std::map<std::string, long> v;
+    for (std::sregex_iterator it(text.begin(), text.end(), num), end; it != end; ++it) v[(*it)[1]] = std::stol((*it)[2]);
+    auto want = [&](const char *k) { return v.count(k) ? v[k] : -1L; };
+    RegSet(kHotKeys, L"Key Modifiers", want("modifiers"));
+    RegSet(kHotKeys, L"Virtual Key", want("virtual_key"));
+    RegSet(kToggle, L"Language Hotkey", want("language_hotkey"), true);
+    RegSet(kToggle, L"Layout Hotkey", want("layout_hotkey"), true);
+    bool live = RegGet(kHotKeys, L"Key Modifiers") == want("modifiers") &&
+                RegGet(kHotKeys, L"Virtual Key") == want("virtual_key") &&
+                RegGet(kToggle, L"Language Hotkey") == want("language_hotkey") &&
+                RegGet(kToggle, L"Layout Hotkey") == want("layout_hotkey");
+    if (live) DeleteFileW(HotkeyBackup().c_str());
+    else ok = false;
+    NotifyInputChanged();
+  }
+  return any && ok;
 }
 
 static void PrepareUserDir() {
@@ -256,7 +292,7 @@ bool Start() {
   // The host app's DLL search path does not include our folder.
   if (!LoadLibraryExW((InstallDir() + L"\\rime.dll").c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH)) return false;
   PrepareUserDir();
-  TakeOverHotkeys();
+  if (!SelfTest()) TakeOverHotkeys();  // the self-test drives takeover/restore itself and restores
   std::string shared = Utf8(InstallDir() + L"\\data"), user = Utf8(UserDir()), log = user + "\\log";
   g_started = kx_start(shared.c_str(), user.c_str(), log.c_str(), 0) != 0;
   return g_started;
@@ -280,7 +316,7 @@ bool AsciiMode(uintptr_t sess) {
 // An AppContainer app cannot open either; it simply keeps the schema default.
 static const wchar_t *kShapeKey = L"Software\\KINFX Input";
 // The self-test (KX_USER set) gets a private cell and no registry, so it never flips the user's choice.
-static bool ShapeTest() { return GetEnvironmentVariableW(L"KX_USER", nullptr, 0) != 0; }
+static bool ShapeTest() { return SelfTest(); }
 static volatile LONG *ShapeCell() {
   static volatile LONG *cell = []() -> volatile LONG * {
     std::wstring name = ShapeTest() ? L"Local\\KINFXInputShapeTest" + std::to_wstring(GetCurrentProcessId()) : L"Local\\KINFXInputShape";
@@ -317,12 +353,16 @@ bool ApplyShape(uintptr_t sess) {
   return true;
 }
 
-bool NoteShape(uintptr_t sess) {
+// Only the user's toggle key publishes. Any other change of the session's full_shape (the shared
+// Lua's own first-key restore from kinfx_full_shape.state, a schema reset) is not a user choice:
+// the held value is put back instead, so an ordinary key can never overwrite another app's newer pick.
+bool NoteShape(uintptr_t sess, bool toggleKey) {
   RimeApi *api = Api();
   if (!sess || !api || !api->get_option) return false;
   bool full = api->get_option((RimeSessionId)sess, "full_shape") != 0;
   int want = ShapeWanted();
   if (want == (full ? 1 : 0)) return false;
+  if (!toggleKey) { ApplyShape(sess); return false; }
   if (volatile LONG *c = ShapeCell()) InterlockedExchange(c, full ? 1 : 2);
   if (!ShapeTest()) RegSet(kShapeKey, L"FullShape", full ? 1 : 0);
   return true;
@@ -330,7 +370,7 @@ bool NoteShape(uintptr_t sess) {
 
 bool ReloadIfChanged() {
   if (!g_started) return false;
-  TakeOverHotkeys();  // idempotent; also repairs a binding something put back
+  if (!SelfTest()) TakeOverHotkeys();  // idempotent; also repairs a binding something put back
   std::wstring p = UserDir() + L"\\settings.json";
   FILETIME now = Stamp(p);
   if (CompareFileTime(&now, &g_stamp) == 0) return false;
