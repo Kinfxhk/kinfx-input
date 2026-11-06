@@ -12,6 +12,9 @@ Covers the owner/pending/undrained registry and the failed-rebuild latch:
 - failed-implicit-retry: commit() must not rebuild a failed-latched engine; only
                        a later explicit changed-settings retry may re-deploy
 - destroy-reservation: destroy unregisters both the native and idle reservations
+- reset-clear-slash:      explicit clear after a CJK commit revokes the script tail
+                       so a following slash is half-width (人類/), not full-width
+- reset-clear-slash-preserve: no clear -> the slash still follows full_shape (好／)
 
 The shared C shim is a per-process singleton (kx_start -> setup() may run once
 per process), so each scenario runs in its own child interpreter; the unittest
@@ -159,6 +162,25 @@ def _run_scenario(kind):
             e.destroy(h)
             check(not e.owns(h) and h not in e.sessions and h not in e.retry_runtime,
                   "destroy-unregisters-both-reservations")
+        elif kind == "reset-clear-slash":
+            h = e.session()
+            e.lib.kx_set_option(e.native_session(h), b"full_shape", 1)
+            text = keys(h, "ofc1")
+            check(text == "人類" and e.property(h, "kinfx_punct_tail") == "other",
+                  "cjk-commit-sets-other-tail", text=text,
+                  tail=e.property(h, "kinfx_punct_tail"))
+            e.clear(h)  # same path as do_reset / do_focus_out / do_disable
+            check(e.property(h, "kinfx_punct_tail") == "", "explicit-clear-resets-tail",
+                  tail=e.property(h, "kinfx_punct_tail"))
+            text += keys(h, "/")
+            check(text == "人類/", "slash-half-width-after-clear", actual=text, expected="人類/")
+        elif kind == "reset-clear-slash-preserve":
+            h = e.session()
+            e.lib.kx_set_option(e.native_session(h), b"full_shape", 1)
+            text = keys(h, "vd1/")
+            check(text == "好／", "slash-full-width-after-cjk", actual=text, expected="好／")
+            text = keys(h, "/init ")
+            check(text == "/init ", "leading-slash-command", actual=text, expected="/init ")
         else:
             raise ValueError(kind)
     finally:
@@ -195,6 +217,12 @@ class Lifecycle(unittest.TestCase):
 
     def test_destroy_unregisters_both_reservations(self):
         self._assert_green("destroy-reservation")
+
+    def test_explicit_clear_resets_tail_and_slash_half_width(self):
+        self._assert_green("reset-clear-slash")
+
+    def test_clear_absent_slash_still_follows_full_shape(self):
+        self._assert_green("reset-clear-slash-preserve")
 
 
 if __name__ == "__main__":

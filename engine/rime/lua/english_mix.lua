@@ -703,14 +703,21 @@ local function init(env)
   env.tail_update_conn = ctx.update_notifier:connect(function(c)
     activate(env)
     if (c.input or "") == "" then
-      if not env.punct_committing and not S.guard and not env.punct_mode_command then
+      -- A CJK commit opens an association update right after its commit-clear;
+      -- that update is still the commit's own cascade, not an independent
+      -- clear, so it must not reset the script tail the commit just set. An
+      -- external clear/reset/focus-out/disable fires an empty-input update
+      -- with no association and must reset the tail.
+      if not env.punct_committing and not S.guard and not env.punct_mode_command
+         and (c:get_property("kinfx_assoc_code") or "") == "" then
         c:set_property("kinfx_punct_tail", "")
         c:set_property("kinfx_digit_tail", "")
       end
-      -- Do not consume punct_committing here: a single commit fires more than
-      -- one update_notifier (commit clear + engine post-key update). Resetting
-      -- on the first would let the second clear the just-set tail (CJK 好 then
-      -- "/" -> 好/ instead of 好／). The flag is reset at the next key instead.
+      -- Consume the one-shot commit guard once the commit's own update(s) ran,
+      -- so a later independent clear (its own empty-input update) resets the
+      -- tail instead of skipping it. Never deferred to the next key: a clear
+      -- can arrive before any next processor invocation.
+      env.punct_committing = false
     end
   end)
   -- 0.1.4: kinfx_blur (what F35 would commit) is kept up to date for shells
@@ -1813,10 +1820,6 @@ end
 return {
   processor = { init = init, fini = fini, func = function(key, env)
     activate(env)
-    -- Consume the one-shot commit guard at the next key: the commit's own
-    -- update_notifier(s) already ran inside the previous key, so the tail it
-    -- set (CJK -> 'other') must survive them and only reset here.
-    env.punct_committing = false
     local ctx = env.engine.context
     -- Native ascii_composer rejects idle letters, but full_shape's postprocessor
     -- may still sink them (without commit_notifier). Observe only that literal
