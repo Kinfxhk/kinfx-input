@@ -7,13 +7,19 @@ Covers (TDD RED->GREEN against the supervisor-20261106T2320 baseline):
 - destroy / new owner: a new owner opened after the toggle owner is destroyed
   restores the global width immediately (before its first key)
 - settings reload/retry: the width follows the global across a redeploy
+- failed-retry: after a schema-broken redeploy fails and is repaired, the explicit
+  retry restores each owner following the global width (not the schema default)
+- formatter no-persist: the width_internal half-width bypass for an English commit
+  never flips nor persists the global width (only a real Shift+Space press does)
 - state file fail-closed: invalid / unreadable / unwritable never silently pass
   nor fake persistence success (missing = legitimate first run, half-width)
-- shortcut no-persist: Ctrl/Alt/Super chords and modifier releases never flip or
-  persist the width (only a real Shift+Space press does)
+- shortcut no-persist: Ctrl/Alt/Super chords (also combined with Shift) and
+  modifier releases never flip or persist the width (only a real Shift+Space does)
 
 Each scenario runs in its own child interpreter (the shared C shim is a
-per-process singleton) with a disposable share/user copy.
+per-process singleton) with a disposable share/user copy. Each input-producing
+helper is evaluated exactly once and its result reused for both the assertion and
+the evidence fields, so the fixture's committed text is a single input, not two.
 
 Run: KX_SHARE=<staged share> KX_LIB=<dir with libkxshim.so> python3 test-fullshape-global.py
 """
@@ -96,14 +102,14 @@ def _run_scenario(kind):
             check(width(a) == 1 and width(b) == 1 and e.full_shape == 1,
                   "toggle-half-to-full-broadcasts-to-existing-b",
                   a=width(a), b=width(b), global_width=e.full_shape)
-            check(cjk_period(b) == "好。", "b-full-width-period-after-follow",
-                  got=cjk_period(b))
+            full_period = cjk_period(b)
+            check(full_period == "好。", "b-full-width-period-after-follow", got=full_period)
             toggle(a)
             check(width(a) == 0 and width(b) == 0 and e.full_shape == 0,
                   "toggle-full-to-half-broadcasts-to-existing-b",
                   a=width(a), b=width(b), global_width=e.full_shape)
-            check(cjk_period(b) == "好.", "b-half-width-period-after-follow",
-                  got=cjk_period(b))
+            half_period = cjk_period(b)
+            check(half_period == "好.", "b-half-width-period-after-follow", got=half_period)
         elif kind == "destroy-new-owner":
             a = e.session()
             toggle(a)
@@ -111,7 +117,8 @@ def _run_scenario(kind):
             e.destroy(a)
             b = e.session()
             check(width(b) == 1, "new-b-restores-global-before-first-key", got=width(b))
-            check(cjk_period(b) == "好。", "new-b-full-width-period", got=cjk_period(b))
+            full_period = cjk_period(b)
+            check(full_period == "好。", "new-b-full-width-period", got=full_period)
         elif kind == "reload-follows-global":
             a = e.session()
             toggle(a)
@@ -170,6 +177,64 @@ def _run_scenario(kind):
                   a=width(a), global_width=e.full_shape)
             check(os.path.exists(state_path) and open(state_path).read().strip() == "1",
                   "shortcut-chords-never-persist", state=open(state_path).read().strip())
+            # Shift combined with Ctrl/Alt/Super is still not a plain Shift+Space
+            # press: it must not toggle nor persist (only a real Shift+Space does).
+            e.key(a, 0x20, CTRL | SHIFT)    # Ctrl+Shift+Space
+            e.key(a, 0x20, ALT | SHIFT)     # Alt+Shift+Space
+            e.key(a, 0x20, SUPER | SHIFT)   # Super+Shift+Space
+            check(width(a) == before and e.full_shape == before,
+                  "ctrl-alt-super-shift-space-chords-never-flip-width",
+                  a=width(a), global_width=e.full_shape)
+            check(os.path.exists(state_path) and open(state_path).read().strip() == "1",
+                  "ctrl-alt-super-shift-space-chords-never-persist",
+                  state=open(state_path).read().strip())
+        elif kind == "formatter-no-persist":
+            a = e.session()
+            toggle(a)  # global -> full = 1, state file "1"
+            check(e.full_shape == 1, "a-toggled-full", global_width=e.full_shape)
+            # An English word commit runs the formatter's width_internal bypass:
+            # it briefly sets full_shape=false to render half-width, then restores
+            # it. That temporary switch is not a user toggle and must not persist.
+            out = ""
+            for c in "hello":
+                e.key(a, ord(c), 0)
+                out += e.commit(a) or ""
+            e.key(a, 0xFF0D, 0)  # Return commits the word
+            out += e.commit(a) or ""
+            check(out == "hello", "english-word-stays-half-width-under-full-shape", got=out)
+            check(e.full_shape == 1, "formatter-bypass-does-not-flip-global-width",
+                  global_width=e.full_shape)
+            check(open(state_path).read().strip() == "1", "formatter-bypass-does-not-persist",
+                  state=open(state_path).read().strip())
+            check(e.full_shape_error is None, "formatter-bypass-leaves-no-error",
+                  error=e.full_shape_error)
+        elif kind == "failed-retry":
+            a = e.session()
+            toggle(a)  # global -> full = 1, state file "1"
+            check(e.full_shape == 1, "a-toggled-full-before-failure", global_width=e.full_shape)
+            schema = os.path.join(share, "data", kxcore.SCHEMA + ".schema.yaml")
+            with open(schema, encoding="utf-8") as f:
+                valid = f.read()
+            # Break the schema -> the explicit reload fails and keeps the idle snapshot.
+            with open(schema, "w", encoding="utf-8") as f:
+                f.write("schema: [broken\n")
+            v = dict(e.settings)
+            v["page_size"] = "5"
+            kxcore.save(v, e.settings_path)
+            check(not e.reload_if_changed(), "failed-reload-truthful")
+            check(e.owns(a) and not e.alive(a), "idle-reservation-survives-failure")
+            # Repair and explicitly retry: the restored owner follows the global width.
+            with open(schema, "w", encoding="utf-8") as f:
+                f.write(valid)
+            v = dict(e.settings)
+            v["page_size"] = "9"
+            kxcore.save(v, e.settings_path)
+            check(e.reload_if_changed(), "explicit-retry-applies")
+            check(e.full_shape == 1 and width(a) == 1,
+                  "width-follows-global-after-failed-retry",
+                  a=width(a), global_width=e.full_shape)
+            check(open(state_path).read().strip() == "1", "state-still-full-after-failed-retry",
+                  state=open(state_path).read().strip())
         else:
             raise ValueError(kind)
     finally:
@@ -217,6 +282,12 @@ class FullShapeGlobal(unittest.TestCase):
 
     def test_shortcut_chords_never_persist(self):
         self._assert_green("shortcut-no-persist")
+
+    def test_formatter_width_internal_never_persists(self):
+        self._assert_green("formatter-no-persist")
+
+    def test_failed_retry_width_follows_global(self):
+        self._assert_green("failed-retry")
 
 
 if __name__ == "__main__":
