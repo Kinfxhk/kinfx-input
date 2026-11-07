@@ -115,10 +115,17 @@ final class KINFXInputController: IMKInputController {
       return true
     }
 
-    // Shift + letter on a 1–2 code composition: commit the codes as English, then
-    // type the letter. A bare Shift tap cannot be seen on this macOS (no
-    // flagsChanged reaches the controller), so this is the reachable gesture.
-    if ShiftEnglish.shouldCommit(preedit: engine.view(session).preedit, mods: mods, chars: chars) {
+    // Digits and punctuation on a 1–2 code composition still use the short-code
+    // English gesture (as + Shift+1). Letters are not intercepted: an uppercase
+    // letter is the engine's signal that the whole token is English
+    // (english_mix.lua). Swallowing it here and inserting only the capital
+    // splits camelCase — FaZe → FaZ水, iPad → iP曗, WiFi → WiF戈 — because the
+    // next unshifted letter starts a new Sucheng composition.
+    let shiftLetter: Bool = {
+      guard let u = chars?.unicodeScalars, u.count == 1, let c = u.first else { return false }
+      return (0x41...0x5a).contains(c.value) || (0x61...0x7a).contains(c.value)
+    }()
+    if !shiftLetter && ShiftEnglish.shouldCommit(preedit: engine.view(session).preedit, mods: mods, chars: chars) {
       tapLeftShift()
       if let text = engine.takeCommit(session) {
         Trace.log("  shift-english commit [\(text)]")
