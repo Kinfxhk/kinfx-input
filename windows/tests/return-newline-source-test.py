@@ -54,13 +54,21 @@ class ReturnNewlineSourceTests(unittest.TestCase):
 
     def test_resend_is_tagged_one_pair_and_failure_traced(self):
         self.assertIn("in[i].ki.dwExtraInfo = (ULONG_PTR)kNewlineTag;", FINISH)
-        self.assertIn("const UINT sent = SendInput(2, in, sizeof(INPUT));", FINISH)
+        self.assertIn("const UINT want = 2 + lead;  // [up] down up", FINISH)  # one fresh down/up pair
         self.assertIn("SendInput failed, newline lost", FINISH)
         self.assertIn("KEYEVENTF_EXTENDEDKEY", FINISH)  # keypad Enter keeps its identity
         # partial insertion (Mac review P3): key-down in -> newline delivered, key-up retried alone
-        self.assertIn("else if (sent == 1) {", FINISH)
-        self.assertIn("const UINT up = SendInput(1, &in[1], sizeof(INPUT));", FINISH)
+        self.assertIn("else if (sent == want - 1) {", FINISH)
+        self.assertIn("const UINT up = SendInput(1, &in[2], sizeof(INPUT));", FINISH)
         self.assertEqual(FINISH.count("SendInput("), 2)
+
+    def test_held_return_is_released_before_resend(self):
+        # Host E40 on f19f39f: Chromium drops a '\r' whose previous-key-down bit is set until the field
+        # saw a fresh Return (crbug.com/319100), so the re-sent Return must be a fresh press.
+        self.assertIn("const UINT lead = (GetAsyncKeyState(VK_RETURN) & 0x8000) ? 1 : 0;", FINISH)
+        self.assertIn("const UINT sent = SendInput(want, &in[1 - lead], sizeof(INPUT));", FINISH)
+        self.assertIn("in[i].ki.dwFlags = ext | (i != 1 ? KEYEVENTF_KEYUP : 0);", FINISH)
+        self.assertIn("in[i].ki.dwExtraInfo = (ULONG_PTR)kNewlineTag;", FINISH)
 
     def test_commit_write_result_is_recorded(self):
         # Mac review P2 on 606ee01: a refused GetRange/SetText must not count as a delivered commit.

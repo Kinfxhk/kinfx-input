@@ -803,17 +803,23 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
       Trace("newline: commit not confirmed, Return swallowed");
       return true;
     }
-    INPUT in[2] = {};
+    // The user's Return is normally still down here. A re-sent key-down on a held key carries the
+    // previous-state bit (lParam bit 30), and Chromium/Electron drop such a '\r' until the field has
+    // seen a fresh Return (crbug.com/319100: accept_carriage_return_), so the first newline in every
+    // field was lost (E40 host f19f39f). Release it first so the re-sent Return is a fresh press.
+    INPUT in[3] = {};
     const DWORD ext = newlineExt_ ? KEYEVENTF_EXTENDEDKEY : 0;  // keypad Enter stays keypad Enter
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 3; i++) {
       in[i].type = INPUT_KEYBOARD; in[i].ki.wVk = VK_RETURN;
-      in[i].ki.dwFlags = ext | (i ? KEYEVENTF_KEYUP : 0); in[i].ki.dwExtraInfo = (ULONG_PTR)kNewlineTag;
+      in[i].ki.dwFlags = ext | (i != 1 ? KEYEVENTF_KEYUP : 0); in[i].ki.dwExtraInfo = (ULONG_PTR)kNewlineTag;
     }
-    const UINT sent = SendInput(2, in, sizeof(INPUT));
-    if (sent == 2) Trace("newline: committed, Return re-sent");
-    else if (sent == 1) {
+    const UINT lead = (GetAsyncKeyState(VK_RETURN) & 0x8000) ? 1 : 0;  // release only a held Return
+    const UINT want = 2 + lead;  // [up] down up
+    const UINT sent = SendInput(want, &in[1 - lead], sizeof(INPUT));
+    if (sent == want) Trace(lead ? "newline: committed, held Return released, re-sent" : "newline: committed, Return re-sent");
+    else if (sent == want - 1) {
       // Only the key-down went in (the newline is delivered); never leave Return logically held.
-      const UINT up = SendInput(1, &in[1], sizeof(INPUT));
+      const UINT up = SendInput(1, &in[2], sizeof(INPUT));
       Trace(up == 1 ? "newline: re-sent, key-up retried" : "newline: re-sent, key-up lost");
     } else Trace("newline: SendInput failed, newline lost");
     return true;
