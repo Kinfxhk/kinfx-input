@@ -11,10 +11,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake g++ \
             libboost-filesystem-dev libboost-system-dev libboost-regex-dev libboost-locale-dev \
-            libyaml-cpp-dev libglog-dev libutf8proc-dev libopencc-dev liblua5.4-dev libmarisa-dev
+            libyaml-cpp-dev libutf8proc-dev libopencc-dev liblua5.4-dev libmarisa-dev
           git clone --depth 1 --branch 1.17.0 https://github.com/rime/librime.git
           cd librime
-          cmake -B build -DBUILD_TEST=OFF -DBUILD_SHARED_LIBS=ON \
+          cmake -B build -DBUILD_TEST=OFF -DBUILD_SHARED_LIBS=ON -DENABLE_LOGGING=OFF \
             -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
           cmake --build build -j"$(nproc)"
           sudo cmake --install build
