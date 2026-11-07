@@ -37,18 +37,25 @@ full-width ，. That is what makes the Shift+association exclusion and the
 deferred-dot/dash genuine-newline falsifiable.
 
 Locale matrix: every case re-runs under each --locales LC_CTYPE value. The
-locale is passed to the probe child via env (LC_CTYPE=loc, LC_ALL removed),
-not via a parent-only setlocale, and the child's *effective* locale is
-reported so a label that silently aliases (macOS maps C -> C.UTF-8) is not
-mistaken for a distinct locale.
+locale is passed to the probe child via env (LC_CTYPE=loc, LC_ALL removed), and
+the probe PROCESS itself calls setlocale(LC_CTYPE, getenv("LC_CTYPE")) then
+reports its own start/end effective locale plus a ctype positive control
+(isalpha(0xba): 0 under C, 1 under a UTF-8 locale on macOS). No Python sidecar
+ever stands in for the probe's locale state — env-only propagation never changes
+libc ctype, so the probe must call setlocale itself and attest its own state.
+
+Verification model (fail-closed): the matrix is VERIFIED only when BOTH the C
+locale (isalpha(0xba)=0) and at least one genuinely distinct UTF-8 locale
+(isalpha(0xba)=1) ran natively in the probe. A label whose setlocale silently
+no-ops (native effective stays C) is SKIPped explicitly; a matrix that cannot
+establish that C vs UTF-8 actually differ inside the probe is reported
+NOTVERIFIED and exits non-zero, never "all skipped = full matrix".
 """
 import argparse
 import json
-import locale
 import os
 from pathlib import Path
 import subprocess
-import sys
 
 
 RET = 0xff0d        # Return
@@ -147,6 +154,7 @@ def return_down_handled(steps):
 
 def run_once(args, work_root, locale_name, env):
     rows = []
+    attest = []
     for name, events, want, want_handled in cases():
         user = work_root / (locale_name + "-" + name)
         user.mkdir(parents=True, exist_ok=False)
@@ -163,7 +171,10 @@ def run_once(args, work_root, locale_name, env):
         rows.append(dict(name=name, expected=want, got=got,
                          handled=handled, want_handled=want_handled,
                          pass_=ok, steps=len(raw.get("steps", []))))
-    return rows
+        # The probe attests its OWN locale state at start and end of each run.
+        attest.append(dict(start=raw.get("localeStart", {}),
+                           end=raw.get("localeEnd", {})))
+    return rows, attest
 
 
 def child_env(loc):
@@ -176,52 +187,77 @@ def child_env(loc):
     return env
 
 
-def effective_locale(env):
-    # Resolve what setlocale(LC_CTYPE, "") yields under this child environment,
-    # so the matrix reports the *effective* locale the probe will run under,
-    # not the requested label. Returns None when the locale cannot be set.
-    code = ("import locale\n"
-            "locale.setlocale(locale.LC_CTYPE, '')\n"
-            "print(locale.setlocale(locale.LC_CTYPE, None))")
-    try:
-        r = subprocess.run([sys.executable, "-c", code],
-                           capture_output=True, text=True, env=env, timeout=15)
-    except Exception:
-        return None
-    if r.returncode != 0 or not r.stdout.strip():
-        return None
-    return r.stdout.strip().splitlines()[-1]
+def classify_locale(requested, attest):
+    # Summarize the probe's own start/end locale attestation into a native
+    # ctype class. This is the probe's state, never a Python sidecar's.
+    effs, isas = set(), set()
+    for a in attest:
+        for k in ("start", "end"):
+            effs.add(a[k].get("effective"))
+            isas.add(a[k].get("isalphaBA"))
+    eff = effs.pop() if len(effs) == 1 else None
+    isa = isas.pop() if len(isas) == 1 else None
+    if eff is None or isa is None:
+        return dict(status="NOTVERIFIED", effective=None, isalphaBA=None, ctype=None,
+                    reason="inconsistent probe attestation "
+                           f"(effective={sorted(effs)}, isalphaBA={sorted(isas)})")
+    if eff == "C":
+        ctype = "C" if isa == 0 else "other"
+    else:
+        ctype = "UTF-8" if isa == 1 else "other"
+    if requested != "C" and eff == "C":
+        # setlocale silently no-op'd: requested a non-C label but the probe's
+        # libc ctype never left C. That label is unsupported -> explicit SKIP.
+        return dict(status="SKIP", effective=eff, isalphaBA=isa, ctype=ctype,
+                    reason=f"setlocale no-op: requested {requested} but native "
+                           f"effective stays C (isalpha(0xba)={isa})")
+    if ctype == "other":
+        # Native locale changed name but the ctype positive control did not flip:
+        # we cannot prove C vs this locale are genuinely distinct.
+        return dict(status="NOTVERIFIED", effective=eff, isalphaBA=isa, ctype=ctype,
+                    reason=f"native ctype not distinct: effective={eff}, "
+                           f"isalpha(0xba)={isa}")
+    return dict(status="OK", effective=eff, isalphaBA=isa, ctype=ctype, reason=None)
 
 
 def run(args):
     locales = args.locales.split(",")
     per_locale = {}
-    effective = {}
+    native = {}
+    skipped = {}
+    ran = []
     for i, loc in enumerate(locales):
-        # Parent-side availability pre-check (locale.Error only fires on Linux
-        # for an un-generated locale; macOS silently aliases, so effective_locale
-        # below is what actually proves the child ran under a real locale).
-        try:
-            locale.setlocale(locale.LC_CTYPE, loc)
-        except locale.Error:
-            print(f"SKIP locale {loc} (unavailable in parent)", flush=True)
-            effective[loc] = None
-            continue
         env = child_env(loc)
-        eff = effective_locale(env)
-        if eff is None:
-            print(f"SKIP locale {loc} (unresolvable in child)", flush=True)
-            effective[loc] = None
-            continue
-        effective[loc] = eff
         work_root = args.work / str(i)
-        per_locale[loc] = run_once(args, work_root, loc, env)
-        print(f"locale {loc} -> effective {eff}", flush=True)
-    if not per_locale:
-        print("ERROR: no usable locale; nothing ran", flush=True)
-        return True
-    ran = list(per_locale)
-    rows = per_locale[ran[0]]
+        try:
+            rows, attest = run_once(args, work_root, loc, env)
+        except RuntimeError as exc:
+            print(f"ERROR locale {loc}: probe failed: {exc}", flush=True)
+            skipped[loc] = "probe-crash"
+            continue
+        summ = classify_locale(loc, attest)
+        native[loc] = summ
+        if summ["status"] != "OK":
+            print(f"{summ['status']} locale {loc}: {summ['reason']}", flush=True)
+            skipped[loc] = summ["reason"]
+            continue
+        ran.append(loc)
+        per_locale[loc] = rows
+        print(f"locale {loc} -> native effective {summ['effective']} "
+              f"isalpha(0xba)={summ['isalphaBA']} [{summ['ctype']}]", flush=True)
+    # Fail-closed: a real locale matrix needs BOTH the C ctype (isalpha(0xba)=0)
+    # and a genuinely distinct UTF-8 ctype (isalpha(0xba)=1) to have run natively.
+    ctypes_ran = {native[loc]["ctype"] for loc in ran}
+    positive_control = "C" in ctypes_ran and "UTF-8" in ctypes_ran
+    if not ran or not positive_control:
+        matrix_status = "NOTVERIFIED"
+        fail_closed = True
+        print("ERROR: native locale matrix NOTVERIFIED — need C (isalpha=0) AND "
+              "a distinct UTF-8 (isalpha=1) to run inside the probe; "
+              f"ran={ran} ctypes={sorted(ctypes_ran)} skipped={skipped}", flush=True)
+    else:
+        matrix_status = "VERIFIED"
+        fail_closed = False
     failed = 0
     for loc, r in per_locale.items():
         for row in r:
@@ -231,16 +267,21 @@ def run(args):
                   f"[{loc}]", row["name"], "commit", repr(row["got"]),
                   "want", repr(row["expected"]),
                   "handled", row["handled"], "want_handled", row["want_handled"], flush=True)
+    base_loc = ran[0] if ran else None
+    rows = per_locale[base_loc] if base_loc else []
     args.output.write_text(json.dumps(
         dict(mode="actual Engine/librime key replay; newline tail revocation (digit+punct), handled+commit+locale+width",
-             locales=locales, ran_locales=ran, effective_locales=effective,
+             locales=locales, ran_locales=ran, skipped_locales=skipped,
+             native_locales={loc: native[loc] for loc in ran},
+             locale_matrix_status=matrix_status,
              rows=rows, per_locale=per_locale,
-             locale_stable=all(per_locale[ran[0]] == per_locale[loc] for loc in ran),
-             locale_distinct=len({effective[loc] for loc in ran}) == len(ran)),
+             locale_stable=bool(base_loc and all(per_locale[base_loc] == per_locale[loc] for loc in ran)),
+             locale_distinct=len({native[loc]["effective"] for loc in ran}) == len(ran)),
         ensure_ascii=False, indent=2))
     total = len(rows) * len(per_locale)
-    print(json.dumps(dict(total=total, passed=total - failed, failed=failed)))
-    return bool(failed)
+    print(json.dumps(dict(total=total, passed=total - failed, failed=failed,
+                          locale_matrix_status=matrix_status)))
+    return bool(failed) or fail_closed
 
 
 if __name__ == "__main__":
