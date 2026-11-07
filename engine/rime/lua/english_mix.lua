@@ -1868,8 +1868,8 @@ return {
     -- Return the chain actually swallows (no CR) is Shift+Return while the
     -- association list is open (the selector consumes it), so exclude exactly
     -- that one — Shift+Return idle is a real CR and must revoke too. Placed
-    -- after func so a same-key commit (hello. / hello- -> tail latin) is not
-    -- undone by a pre-func clear.
+    -- after func so a confirm Return (hello/PS5 -> tail latin) is not undone;
+    -- a deferred dot/dash Return returns kNoop, so it IS cleared (a newline).
     if r == kNoop and not key:release()
        and (kc == 0xff0d or kc == 0xff8d)
        and plain and not (key:shift() and assoc_active(ctx)) then
