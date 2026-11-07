@@ -56,6 +56,21 @@ inline Rect PlaceCandidate(Rect caret, int w, int h, const Rect &area, int gap, 
     if (how) *how = 0;
     return FitInside(Rect{caret.left, caret.bottom + gap, caret.left + w, area.bottom}, area);
   }
+  // No room above or below: beside the caret on the side with more room, never wider than that
+  // room, so clamping cannot slide it back over the caret (Mac review 2026-11-07 P3). Only a
+  // caret with no room on any side falls back to a plain clamp.
+  const int rightSpace = area.right - (caret.right + gap);
+  const int leftSpace = (caret.left - gap) - area.left;
+  if (rightSpace >= leftSpace && rightSpace > 0) {
+    if (how) *how = 2;
+    const int rw = w < rightSpace ? w : rightSpace;
+    return FitInside(Rect{caret.right + gap, caret.top, caret.right + gap + rw, caret.top + h}, area);
+  }
+  if (leftSpace > 0) {
+    if (how) *how = 3;
+    const int lw = w < leftSpace ? w : leftSpace;
+    return FitInside(Rect{caret.left - gap - lw, caret.top, caret.left - gap, caret.top + h}, area);
+  }
   if (how) *how = 2;
   return FitInside(right, area);
 }

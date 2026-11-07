@@ -172,6 +172,23 @@ int main() {
     p = FitCandidates(w0, true, caret, area, g, &c, &shown, &how, &vert);
     Check("fit empty: no cells", c.empty() && shown == 0);
   }
+  {
+    // P3 (Hermes 26cbc89): caret at the right edge of a strip with no room above/below.
+    const Rect strip{0, 0, 300, 40};
+    const Rect cr{292, 0, 300, 40};
+    Rect p = PlaceCandidate(cr, 130, 40, strip, 2, false, &how);
+    Check("P3 right edge: goes left, clear of caret", how == 3 && !Intersects(p, cr) && p.left >= 0 && p.right <= 290);
+    const Rect cl{0, 0, 8, 40};
+    p = PlaceCandidate(cl, 500, 40, strip, 2, false, &how);
+    Check("P3 left edge, too wide: right side shrunk, clear of caret", how == 2 && !Intersects(p, cl) && p.right <= 300);
+    const CandGeom g{30, 14, 6, 20, 2, 1};
+    std::vector<int> w3(3, 60);
+    std::vector<Rect> c; int shown = -1; bool vert = false;
+    p = FitCandidates(w3, true, cr, strip, g, &c, &shown, &how, &vert);
+    bool clipped = false; const int cw = p.Width() - 2, ch = p.Height() - 2;
+    for (auto &r : c) if (!IsEmpty(r) && (r.right > cw || r.bottom > ch)) clipped = true;
+    Check("P3 via FitCandidates: caret clear, no clipped visible cell", !Intersects(p, cr) && !clipped);
+  }
   std::printf("%d FAIL\n", fails);
   return fails ? 1 : 0;
 }

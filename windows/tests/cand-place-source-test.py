@@ -34,7 +34,8 @@ class CandidatePlacement(unittest.TestCase):
         # is clamped into the work area.
         self.assertIn('const int belowSpace = area.bottom - (caret.bottom + gap);', HDR)
         self.assertIn('const int aboveSpace = (caret.top - gap) - area.top;', HDR)
-        self.assertEqual(HDR.count('return FitInside('), 7)
+        # 9 since 2026-11-07 (P3: the no-room fallback gained a bounded right and left side).
+        self.assertEqual(HDR.count('return FitInside('), 9)
         self.assertNotIn('return below;', HDR)
         self.assertNotIn('return above;', HDR)
 
