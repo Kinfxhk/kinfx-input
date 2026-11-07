@@ -524,7 +524,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
 
   void ResetInput() {
     ++generation_;
-    pending_ = pendUp_ = pendEaten_ = paste_ = switch_ = hint_ = cands_ = false;
+    pending_ = pendUp_ = pendEaten_ = paste_ = switch_ = hint_ = cands_ = newline_ = newlineExt_ = false;
     pendW_ = 0;
     chord_ = KxChord();
     last_ = POINT{-1, -1}; lastH_ = 0;
@@ -664,6 +664,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
       pending_ = false;
       if (same) return pendEaten_;
     }
+    newline_ = false;  // only the key that set it (test + real call of one Return) may use it
     int sym = KeySym(w, l), mask = Mask();
     // Tab is the shared "expand" key (Linux/macOS behave the same): with an open composition it
     // goes to Rime, where win_quick toggles the multi-column list and the text stays in preedit
@@ -693,6 +694,13 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
       // schema resets full_shape), must not flip it back. Apply before the key, publish after.
       if (kx::ApplyShape(sess_)) Trace("shape applied");
       eaten = kx_key(sess_, sym, m | (up ? kRelease : 0)) != 0;
+      // A Return Rime lets through while a preedit is open (deferred "hello." / "hello-") is a
+      // genuine newline (shared hello-dot-return): Rime committed the held text. Passing the key
+      // on would let the app spend it ending the composition, so no CR LF reached the document.
+      // Claim it here; Handle commits synchronously and then re-sends one Return.
+      newline_ = sym == 0xff0d && !up && !eaten && comp_ != nullptr;
+      if (newline_) eaten = true;
+      newlineExt_ = newline_ && ((l >> 24) & 1);
       // key_bindings: Shift+space toggles full_shape (the Ctrl chords never reach Rime here).
       if (kx::NoteShape(sess_, sym == 0x20 && (m & kShift) && !up)) Trace("shape held");
       Trace("key sym=" + std::to_string(sym) + " m=" + std::to_string(m) + (up ? " up" : "") + " eaten=" + (eaten ? "1" : "0"));
@@ -787,6 +795,19 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     // closes the association list (Rime state changed) and must still reach the app.
     Update(c);
     if (hint_) { hint_ = false; ShowHint(); }
+    const bool newline = newline_ && !up && w == VK_RETURN;
+    newline_ = false;
+    if (newline) {
+      // The held text is in the document and the composition is closed (Update above), so this
+      // Return reaches the app as a plain newline; Rime sees it idle and lets it through again.
+      INPUT in[2] = {};
+      const DWORD ext = newlineExt_ ? KEYEVENTF_EXTENDEDKEY : 0;  // keypad Enter stays keypad Enter
+      in[0].type = INPUT_KEYBOARD; in[0].ki.wVk = VK_RETURN; in[0].ki.dwFlags = ext;
+      in[1].type = INPUT_KEYBOARD; in[1].ki.wVk = VK_RETURN; in[1].ki.dwFlags = ext | KEYEVENTF_KEYUP;
+      SendInput(2, in, sizeof(INPUT));
+      Trace("newline: committed held text, re-sent Return");
+      return true;
+    }
     if (paste_ && !up) {
       // TSF already ate this Ctrl+V (OnTestKeyDown); the held text is written, composition closed,
       // so a re-sent V reaches the app as a plain paste (paste_ needs comp_, now null).
@@ -1061,6 +1082,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   bool hint_ = false;  // a mode switch is waiting to be shown after the next Update
   bool switch_ = false;  // a mode switch happened in the test path: Tail() commits it
   bool pending_ = false, pendUp_ = false, pendEaten_ = false, paste_ = false;
+  bool newline_ = false, newlineExt_ = false;  // an unhandled Return closed a preedit: re-send it after the commit
   bool cands_ = false;  // candidates (incl. the association list) were showing on the last update
   WPARAM pendW_ = 0;
 };
