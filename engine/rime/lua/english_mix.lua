@@ -444,12 +444,34 @@ local function space_text(env, raw)
   end
   local name = word_text(env.names_mem, raw) -- kinfx_names (adsense -> AdSense)
   if name then
+    -- kinfx_names acronym (ABCD/abcd) is not a word the user typed. Shouting it
+    -- on Space turned abcd into ABCD; the caller splits that run as Sucheng.
+    if name ~= raw and name == raw:upper() and not env.names[raw] then
+      return nil
+    end
     return name
   end
   if text and env.hold_set[raw] then
     return text
   end
   return nil
+end
+
+-- Pair split a lowercase run the way v041 does when a non-word breaks
+-- (abcd → 明銖, abcde → 明銖水). Used when a names-table acronym would
+-- otherwise shout the typed letters (ABCD/abcd).
+local function sucheng_pairs(env, raw)
+  local out, i = {}, 1
+  while i <= #raw do
+    local n = (i + 1 <= #raw) and 2 or 1
+    local text = pm.first_text(env.main, raw:sub(i, i + n - 1))
+    if not text then
+      return nil
+    end
+    out[#out + 1] = text
+    i = i + n
+  end
+  return table.concat(out)
 end
 
 -- Left Shift form: same rule (lowercase word first, then the names list).
@@ -1674,7 +1696,14 @@ function process(key, env)
       if cseg and cseg:has_tag("uppercase") then
         local _, caps = input:gsub("[A-Z]", "")
         if caps >= 2 and not input:match("[a-z]") then
-          commit_word(env, ctx, input)
+          -- OAuth / similar listed tokens continue in Latin. An unlisted tail
+          -- (MLG + 設計) still commits the abbreviation so the recognizer cannot
+          -- swallow the Sucheng codes.
+          local cont = input:lower() .. repr
+          if not (env.name_prefix[cont] or pm.has_prefix(env.en_mem, cont)
+             or pm.has_prefix(env.names_mem, cont)) then
+            commit_word(env, ctx, input)
+          end
         end
       end
       return kNoop
@@ -1694,6 +1723,22 @@ function process(key, env)
       S.known_en = en_prefix(env, rest) and #rest or 0
     end
     return kAccepted
+  end
+
+  -- Uppercase letter = the whole token is English (B1). Commit the letters
+  -- already typed, then let the uppercase recognizer own this capital and the
+  -- tail (macOS, iPad, FaZe, McDonald's). flush() would top those codes out as
+  -- Chinese (mac → 百鍊, then OS). A 1–2 code that is not being tracked (vd)
+  -- is the same signal: commit the letters, do not let the speller top them out.
+  if plain and kc >= 0x41 and kc <= 0x5a then
+    if S.tracking and S.raw ~= "" then
+      commit_word(env, ctx, S.raw)
+      return kNoop
+    end
+    if input:match("^[a-z]+$") and #input >= 1 and #input <= 2 then
+      commit_word(env, ctx, input)
+      return kNoop
+    end
   end
 
   if not S.tracking then
@@ -1758,6 +1803,23 @@ function process(key, env)
       end
       commit_word(env, ctx, text .. string.char(kc))
       return kAccepted
+    end
+    -- Names-table acronym (ABCD/abcd) is not the typed word. Split the run as
+    -- Sucheng pairs, same as abcde, instead of paging a menu whose Space used
+    -- to commit the shouted form.
+    local name = word_text(env.names_mem, S.raw)
+    if name and name ~= S.raw and name == S.raw:upper() and not env.names[S.raw] then
+      local split = sucheng_pairs(env, S.raw)
+      if split then
+        if repr == "space" then
+          commit_word(env, ctx, split .. " ")
+        elseif repr == "Return" then
+          commit_word(env, ctx, split)
+        else
+          commit_word(env, ctx, split .. (kc < 0x80 and string.char(kc) or ""))
+        end
+        return kAccepted
+      end
     end
   end
   if endkey and unknown_space_ok(env, ctx) then
