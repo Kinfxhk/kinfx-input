@@ -9,15 +9,54 @@
 #include "chord.h"
 #include "core.h"
 #include "langbar.h"
+#include "rime_api.h"
 
 HINSTANCE g_hinst;
 extern "C" int __stdcall KxDeploy();
-static int fails = 0;
+static int fails = 0, gaps = 0;
+
+// A contract vector the shared engine does not meet yet (Hermes owns the fix). It is not a PASS and
+// not hidden as INFO: it prints GAP, counts in the summary, and turns into PASS by itself once the
+// shared fix lands. It does not fail the Windows gate, because Windows must not change shared Lua.
+static void Gap(const std::string &name, const std::string &got, const std::string &want) {
+  bool ok = got == want;
+  gaps += !ok;
+  printf("%s %s: got [%s] want [%s]\n", ok ? "PASS" : "GAP(shared, open)", name.c_str(), got.c_str(), want.c_str());
+}
 
 static void Check(const std::string &name, const std::string &got, const std::string &want) {
   bool ok = got == want;
   fails += !ok;
   printf("%s %s: got [%s] want [%s]\n", ok ? "PASS" : "FAIL", name.c_str(), got.c_str(), want.c_str());
+}
+
+// Live Windows input hotkeys (00000010 window switch, 00000070 CHT toggle, the Toggle pair) plus
+// the CHT binding from ImmGetHotKey. The run must end with exactly what it started with.
+static std::string LiveHotkeys() {
+  auto reg = [](const wchar_t *sub, const wchar_t *n) {
+    HKEY k;
+    wchar_t buf[16] = {};
+    DWORD type = 0, sz = sizeof buf;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, sub, 0, KEY_QUERY_VALUE, &k)) return -1L;
+    long r = -1L;
+    if (RegQueryValueExW(k, n, nullptr, &type, (BYTE *)buf, &sz) == ERROR_SUCCESS) {
+      if (type == REG_SZ) r = wcstol(buf, nullptr, 10);
+      else if (sz >= 4) { DWORD d = 0; memcpy(&d, buf, 4); r = (long)d; }
+    }
+    RegCloseKey(k);
+    return r;
+  };
+  std::string out;
+  for (auto sub : {L"Control Panel\\Input Method\\Hot Keys\\00000010", L"Control Panel\\Input Method\\Hot Keys\\00000070"})
+    out += std::to_string(reg(sub, L"Key Modifiers")) + "/" + std::to_string(reg(sub, L"Virtual Key")) + "/";
+  out += std::to_string(reg(L"Keyboard Layout\\Toggle", L"Language Hotkey")) + "/" +
+         std::to_string(reg(L"Keyboard Layout\\Toggle", L"Layout Hotkey"));
+  typedef BOOL(WINAPI * GetFn)(DWORD, UINT *, UINT *, HKL *);
+  HMODULE imm = LoadLibraryW(L"imm32.dll");
+  auto get = imm ? (GetFn)GetProcAddress(imm, "ImmGetHotKey") : nullptr;
+  UINT m = 0, v = 0; HKL h = nullptr;
+  out += get && get(0x70, &m, &v, &h) ? " imm70=" + std::to_string(m) + "/" + std::to_string(v) : " imm70=none";
+  return out;
 }
 
 static std::string Take(uintptr_t s) {
@@ -75,7 +114,9 @@ static int LightPixels(HICON ic) {
 int main() {
   SetConsoleOutputCP(CP_UTF8);
   g_hinst = GetModuleHandleW(nullptr);
+  const std::string hotkeysAtStart = LiveHotkeys();
   Check("start", kx::Start() ? "1" : "0", "1");
+  Check("KX_USER start leaves hotkeys alone", LiveHotkeys(), hotkeysAtStart);
   Check("vd1", Type("vd1"), "\xe5\xa5\xbd");
   int n = 0;
   Type("vd", &n);
@@ -86,35 +127,124 @@ int main() {
   Check("Return after pick passes to app", std::to_string(kx_key(s, 0xff0d, 0)), "0");
   kx_destroy(s);
   Check("iPhone Space", Type("iPhone "), "iPhone ");
-  // 0.1.8 punctuation: one key = one glyph and no candidate menu, so nothing ever asks the user to
-  // pick 全形/半形. Cands() must stay 0 for every key.
+  // Width contract (canonical shared 3cf6a6b supersedes the 0.1.8 reset:1 rows, Mac review P1):
+  // full_shape reset:0 (default 半形) governs punctuation only; emitted Space is U+0020 in BOTH
+  // modes; composing Space still pages. Each mode is set explicitly per session (SetShape), so
+  // neither the schema default nor kinfx_full_shape.state from an earlier run decides a row.
   {
+    DeleteFileW((kx::UserDir() + L"\\kinfx_full_shape.state").c_str());
+    RimeApi *api = rime_get_api();
+    auto open = [&](int full) {
+      uintptr_t g = kx_session("kinfx_quick");
+      kx_key(g, 0xff1b, 0);  // idle Escape: the first key runs the Lua state restore, nothing else
+                             // (a Shift tap would be the 中/英 chord)
+      Take(g);
+      if (full >= 0) api->set_option((RimeSessionId)g, "full_shape", full == 1);
+      return g;
+    };
+    auto typeIn = [&](int full, std::initializer_list<const char *> keys, int *cands = nullptr) {
+      uintptr_t g = open(full);
+      std::string out;
+      for (const char *k : keys) {
+        std::string ks = k;
+        if (ks == "ESC") kx_key(g, 0xff1b, 0);
+        else if (ks == "RET") kx_key(g, 0xff0d, 0);
+        else for (char ch : ks) kx_key(g, (unsigned char)ch, 0);
+        out += Take(g);
+      }
+      if (cands) *cands = Cands(g);
+      kx_destroy(g);
+      return out;
+    };
+    {
+      uintptr_t g = open(-1);
+      Check("width default is half (reset:0)", std::to_string(api->get_option((RimeSessionId)g, "full_shape")), "0");
+      kx_destroy(g);
+    }
     struct P { const char *keys; const wchar_t *want; };
-    static const P half[] = {
-        {",", L","}, {".", L"."}, {"?", L"?"}, {"!", L"!"}, {";", L";"}, {":", L":"},
-        {"(", L"("}, {")", L")"}, {"[", L"["}, {"]", L"]"}, {"{", L"{"}, {"}", L"}"},
-        {"<", L"<"}, {">", L">"}, {"\\", L"\\"}, {"''", L"''"}, {"\"\"", L"\"\""},
-        {"/", L"/"}, {"-", L"-"}, {"_", L"_"}, {"+", L"+"}, {"=", L"="}, {"~", L"~"},
-        {"$", L"$"}, {"%", L"%"}, {"@", L"@"}, {"#", L"#"}, {"^", L"^"}, {"&", L"&"},
-        {"*", L"*"}, {"|", L"|"}, {"`", L"`"},
+    static const P full[] = {
+        {",", L"，"}, {".", L"。"}, {"?", L"？"}, {"!", L"！"}, {";", L"；"}, {":", L"："},
+        {"(", L"（"}, {")", L"）"}, {"[", L"「"}, {"]", L"」"}, {"{", L"『"}, {"}", L"』"},
+        {"<", L"《"}, {">", L"》"}, {"\\", L"、"}, {"''", L"‘’"}, {"\"\"", L"“”"},
+        // Leading slash in a fresh context is a command leader (/init): half-width by contract.
+        {"/", L"/"}, {"-", L"－"}, {"_", L"＿"}, {"+", L"＋"}, {"=", L"＝"}, {"~", L"～"},
+        {"$", L"＄"}, {"%", L"％"}, {"@", L"＠"}, {"#", L"＃"}, {"^", L"＾"}, {"&", L"＆"},
+        {"*", L"＊"}, {"|", L"｜"}, {"`", L"｀"},
     };
     std::string bad;
-    for (const P &p : half) {
+    for (const P &p : full) {
       int c = 0;
-      std::string out = Type(p.keys, &c);
+      std::string out = typeIn(1, {p.keys}, &c);
       if (out != kx::Utf8(p.want) || c) bad += std::string(p.keys) + "=" + out + "/" + std::to_string(c) + " ";
     }
-    Check("punct half: one glyph, no menu", bad.empty() ? "ok" : bad, "ok");
-    // Shift+Space toggles full shape: the same keys give full-width glyphs, and toggling back
-    // gives ASCII again (code/URLs must not break).
-    s = kx_session("kinfx_quick");
-    std::string shape;
-    Check("Shift+Space eaten", std::to_string(kx_key(s, 0x20, 1)), "1");
-    for (const char *k : {",", "/", "-", "*"}) { kx_key(s, *k, 0); shape += Take(s); }
-    kx_key(s, 0x20, 1);
-    for (const char *k : {"/", "*"}) { kx_key(s, *k, 0); shape += Take(s); }
-    Check("full_shape, then half again", shape, kx::Utf8(L"，／－＊/*"));
-    kx_destroy(s);
+    Check("punct full mode: one glyph, no menu", bad.empty() ? "ok" : bad, "ok");
+    bad.clear();
+    for (const char *k : {",", ".", "?", "!", ";", ":", "(", ")", "[", "]", "-", "*", "/"}) {
+      int c = 0;
+      std::string out = typeIn(0, {k}, &c);
+      if (out != k || c) bad += std::string(k) + "=" + out + "/" + std::to_string(c) + " ";
+    }
+    Check("punct half mode: plain ASCII, no menu", bad.empty() ? "ok" : bad, "ok");
+    // Space: U+0020 in both modes, after CJK, digits and Latin alike.
+    for (int m : {0, 1}) {
+      std::string tag = m ? "full" : "half";
+      Check("space " + tag + ": idle", typeIn(m, {" "}), " ");
+      Check("space " + tag + ": after 好", typeIn(m, {"vd1", "ESC", " "}), "\xe5\xa5\xbd ");
+      Check("space " + tag + ": hello.", typeIn(m, {"hello.", " "}), "hello. ");
+      Check("space " + tag + ": 60cm", typeIn(m, {"60cm", " "}), "60cm ");
+      Check("space " + tag + ": 60 then two", typeIn(m, {"60", " ", " "}), "60  ");
+    }
+    {
+      int c = 0;
+      typeIn(1, {"vd", " "}, &c);  // composing Space still pages, it does not commit a space
+      Check("space while composing pages (full)", std::to_string(c > 0), "1");
+    }
+    Check("comma after 好 full", typeIn(1, {"vd1", ","}), "\xe5\xa5\xbd\xef\xbc\x8c");
+    Check("comma after 好 half", typeIn(0, {"vd1", ","}), "\xe5\xa5\xbd,");
+    // Shift+Space toggles 半形 -> 全形 -> 半形 from the explicit half start.
+    {
+      uintptr_t g = open(0);
+      std::string shape;
+      Check("Shift+Space eaten", std::to_string(kx_key(g, 0x20, 1)), "1");  // half -> full
+      for (const char *k : {"v", "d", "1", ","}) { kx_key(g, *k, 0); shape += Take(g); }
+      kx_key(g, 0x20, 1);  // full -> half
+      for (const char *k : {"v", "d", "1", ","}) { kx_key(g, *k, 0); shape += Take(g); }
+      Check("Shift+Space: full then half", shape, "\xe5\xa5\xbd\xef\xbc\x8c\xe5\xa5\xbd,");
+      kx_destroy(g);
+    }
+    DeleteFileW((kx::UserDir() + L"\\kinfx_full_shape.state").c_str());
+    // 全形/半形 held user-wide (the TSF key path runs ApplyShape before and NoteShape after each
+    // key; only Shift+Space publishes). App A picks full; app B and A after switching back keep it.
+    {
+      Check("shape: nothing chosen yet", std::to_string(kx::ShapeWanted()), "-1");
+      uintptr_t a = open(-1);
+      kx::ApplyShape(a);
+      kx_key(a, 0x20, 1);  // Shift+Space: half -> full
+      kx::NoteShape(a, true);
+      Check("shape: Shift+Space held as full", std::to_string(kx::ShapeWanted()), "1");
+      uintptr_t b = open(-1);  // new app: schema default is half
+      kx::ApplyShape(b);
+      std::string got;
+      for (const char *k : {"v", "d", "1", ","}) { kx_key(b, *k, 0); got += Take(b); kx::NoteShape(b, false); }
+      Check("shape: other app keeps full", got, "\xe5\xa5\xbd\xef\xbc\x8c");
+      // A drift that is not the toggle key (e.g. a stale Lua state restore) is undone, not published.
+      api->set_option((RimeSessionId)b, "full_shape", false);
+      kx::NoteShape(b, false);
+      Check("shape: non-toggle drift not published", std::to_string(kx::ShapeWanted()) + "/" +
+            std::to_string(api->get_option((RimeSessionId)b, "full_shape")), "1/1");
+      kx_key(b, 0x20, 1);  // Shift+Space in B: full -> half
+      kx::NoteShape(b, true);
+      kx::ApplyShape(a);  // back to app A
+      got.clear();
+      for (const char *k : {"v", "d", "1", ","}) { kx_key(a, *k, 0); got += Take(a); }
+      Check("shape: half chosen in B reaches A", got, "\xe5\xa5\xbd,");
+      kx_destroy(a);
+      kx_destroy(b);
+    }
+    DeleteFileW((kx::UserDir() + L"\\kinfx_full_shape.state").c_str());
+    // Handoff vector the shared engine owns, judged with an explicit mode (not the default).
+    Gap("shared: full mode vd1 then '/' after CJK", typeIn(1, {"vd1", "/", "RET"}), "\xe5\xa5\xbd\xef\xbc\x8f");
+    Check("half mode vd1 then '/'", typeIn(0, {"vd1", "/", "RET"}), "\xe5\xa5\xbd/");
   }
   for (auto cw : {std::pair<const char *, const char *>{"vdhel", "\xe5\xa5\xbd\xe5\x8f\x8d"}, {"vd", ""}}) {
     const char *code = cw.first, *want = cw.second;
@@ -126,9 +256,10 @@ int main() {
     Check(std::string(code) + " Ctrl+V commits held, app pastes", out + "/" + std::to_string(eaten), std::string(want) + "/0");
     kx_destroy(s);
   }
-  // 0.1.4 blur (F35 from OnCompositionTerminated): what was typed stays.
-  for (auto cw : {std::pair<const char *, const char *>{"hel", "hel"}, {"vdhel", "vdhel"}, {"vd", "\xe5\xa5\xbd"},
-                  {"vd1hel", "\xe5\xa5\xbdhel"}, {"ofca", "ofca"}, {"he", "\xe5\x8f\x8d"}}) {
+  // 0.1.4 blur (F35 from OnCompositionTerminated): what was typed stays. Shared default
+  // english/blur_short=letters keeps a 1-2 letter run as letters (same rows as mac/linux selftest).
+  for (auto cw : {std::pair<const char *, const char *>{"hel", "hel"}, {"vdhel", "vdhel"}, {"vd", "vd"},
+                  {"vd1hel", "\xe5\xa5\xbdhel"}, {"ofca", "ofca"}, {"he", "he"}}) {
     s = kx_session("kinfx_quick");
     std::string out;
     for (const char *k = cw.first; *k; k++) { kx_key(s, *k, 0); out += Take(s); }
@@ -139,7 +270,8 @@ int main() {
     kx_destroy(s);
   }
   // 0.1.6 Chinese/English switch: Control+space toggles ascii_mode (key_binder).
-  // In ascii mode Rime rejects the letters so the app types them; back in Chinese they compose.
+  // Fix A (locked): in ascii mode english_mix eats a letter and commits it half-width (v, never
+  // ｖ even under full_shape), so the shell inserts it; back in Chinese they compose.
   {
     uintptr_t t = kx_session("kinfx_quick");
     int on = kx_key(t, 0x20, 4);
@@ -148,7 +280,7 @@ int main() {
     std::string out;
     for (char k : std::string("vd1")) { kx_key(t, k, 0); out += Take(t); }
     Check("Control+space toggles ascii_mode", std::to_string(on) + "/" + std::to_string(pass) + "/" +
-                                                 std::to_string(off) + "/" + out, "1/0/1/\xe5\xa5\xbd");
+                                                 std::to_string(off) + "/" + out, "1/1/1/v\xe5\xa5\xbd");
     kx_destroy(t);
   }
   // A live composition is closed before the toggle (the shell's sequence): Return commits the
@@ -162,7 +294,10 @@ int main() {
     kx_key(t, 0xff1b, 0);
     kx_key(t, 0x20, 4);
     int v = kx_key(t, 'v', 0), d = kx_key(t, 'd', 0);
-    Check("preedit commit then toggle", out + "/" + std::to_string(v) + std::to_string(d), "\xe5\xa5\xbd/00");
+    std::string typed = Take(t);
+    // No letter swallowed: both are committed as half-width ASCII (Fix A).
+    Check("preedit commit then toggle", out + "/" + std::to_string(v) + std::to_string(d) + "/" + typed,
+          "\xe5\xa5\xbd/11/vd");
     kx_destroy(t);
   }
   // The mode hint reads ascii_mode back to know 中 vs 英: a wrong read would mislabel the switch.
@@ -209,9 +344,9 @@ int main() {
   // Hotkey takeover: Windows handles Ctrl+Space / Ctrl+Shift before TSF, so those OS bindings are
   // switched off and the originals kept in the backup. Alt+Shift goes the other way: Language Hotkey
   // "1" = Left Alt+Shift hands it back to Windows, Layout Hotkey "3" = None keeps Ctrl+Shift for the
-  // chord (both are REG_SZ; measured values). Start() already took them over, so the test puts the
-  // recorded originals back and watches the takeover switch them off again, then checks the restore
-  // (the uninstall path) returns the backup's values.
+  // chord (both are REG_SZ; measured values). Under KX_USER Start() leaves them alone, so the test
+  // records the live values, watches the takeover switch them off, then checks the restore
+  // (the uninstall path) returns exactly the live baseline, and leaves no backup behind.
   {
     const wchar_t *HK = L"Control Panel\\Input Method\\Hot Keys\\00000010", *TOG = L"Keyboard Layout\\Toggle";
     auto reg = [](const wchar_t *sub, const wchar_t *n) {
@@ -227,42 +362,115 @@ int main() {
       RegCloseKey(k);
       return r;
     };
-    auto set = [](const wchar_t *sub, const wchar_t *n, long v, bool str) {
-      HKEY k;
-      if (RegCreateKeyExW(HKEY_CURRENT_USER, sub, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &k, nullptr)) return;
-      if (v < 0) RegDeleteValueW(k, n);
-      else if (str) { wchar_t s[8]; swprintf(s, 8, L"%ld", v); RegSetValueExW(k, n, 0, REG_SZ, (BYTE *)s, (DWORD)((wcslen(s) + 1) * 2)); }
-      else RegSetValueExW(k, n, 0, REG_DWORD, (BYTE *)&v, 4);
-      RegCloseKey(k);
-    };
     auto state = [&] {
       return std::to_string(reg(HK, L"Key Modifiers")) + "/" + std::to_string(reg(HK, L"Virtual Key")) + "/" +
              std::to_string(reg(TOG, L"Language Hotkey")) + "/" + std::to_string(reg(TOG, L"Layout Hotkey"));
     };
-    std::wstring bp = kx::UserDir() + L"\\hotkeys-backup.json";
-    std::ifstream f(bp);
-    std::string json((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-    f.close();  // an open handle blocks the restore's DeleteFile
-    std::map<std::string, long> orig;
-    std::string want;
-    std::regex re("\"(modifiers|virtual_key|language_hotkey|layout_hotkey)\"\\s*:\\s*(-?[0-9]+)");
-    for (std::sregex_iterator it(json.begin(), json.end(), re), end; it != end; ++it) orig[(*it)[1]] = std::stol((*it)[2]);
-    if (json.empty()) want = "no backup";
-    else {
-      set(HK, L"Key Modifiers", orig["modifiers"], false);
-      set(HK, L"Virtual Key", orig["virtual_key"], false);
-      set(TOG, L"Language Hotkey", orig["language_hotkey"], true);
-      set(TOG, L"Layout Hotkey", orig["layout_hotkey"], true);
-      want = std::to_string(orig["modifiers"]) + "/" + std::to_string(orig["virtual_key"]) + "/" +
-             std::to_string(orig["language_hotkey"]) + "/" + std::to_string(orig["layout_hotkey"]);
-    }
+    // KX_USER: Start() no longer takes the hotkeys over, so the test owns the whole cycle. A backup
+    // left by an interrupted earlier run is put back first, then the live values are the baseline.
+    std::wstring bp = kx::UserDir() + L"\\hotkeys-backup.json", cbp = kx::UserDir() + L"\\hotkeys-backup-cht.json";
+    if (GetFileAttributesW(bp.c_str()) != INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW(cbp.c_str()) != INVALID_FILE_ATTRIBUTES)
+      kx::RestoreHotkeys();
+    const wchar_t *HK70 = L"Control Panel\\Input Method\\Hot Keys\\00000070";
+    const std::string before = state();
+    const long chtVk = reg(HK70, L"Virtual Key"), chtMod = reg(HK70, L"Key Modifiers");
     kx::TakeOverHotkeys();
     std::string taken = state();                    // sequenced: an argument order would let state()
+    long taken70 = reg(HK70, L"Virtual Key");
     bool back = kx::RestoreHotkeys();               // and the restore swap places
     std::string restored = state();
+    Check("CHT Ctrl+Space hotkey off", std::to_string(chtVk <= 0 ? 0 : taken70 <= 0 ? 0 : taken70), "0");
+    Check("CHT Ctrl+Space hotkey restored (live)",
+          std::to_string(reg(HK70, L"Key Modifiers")) + "/" + std::to_string(reg(HK70, L"Virtual Key")),
+          std::to_string(chtMod) + "/" + std::to_string(chtVk));
     Check("hotkeys taken over", taken, "0/0/1/3");
-    Check("hotkeys restored", std::to_string(back ? 1 : 0) + "/" + restored, "1/" + want);
-    Check("hotkey backup removed", std::to_string(GetFileAttributesW(bp.c_str()) != INVALID_FILE_ATTRIBUTES ? 1 : 0), "0");
+    Check("hotkeys restored to the live baseline", std::to_string(back ? 1 : 0) + "/" + restored, "1/" + before);
+    Check("hotkey backups removed",
+          std::to_string(GetFileAttributesW(bp.c_str()) != INVALID_FILE_ATTRIBUTES ? 1 : 0) + "/" +
+              std::to_string(GetFileAttributesW(cbp.c_str()) != INVALID_FILE_ATTRIBUTES ? 1 : 0),
+          "0/0");
+    // Backup must be proven before a binding is cleared: with the backup path blocked (a directory
+    // of the same name, so the write fails), takeover leaves Windows' own bindings untouched.
+    CreateDirectoryW(bp.c_str(), nullptr);
+    CreateDirectoryW(cbp.c_str(), nullptr);
+    kx::TakeOverHotkeys();
+    std::string blocked = state();
+    long blocked70 = reg(HK70, L"Virtual Key");
+    RemoveDirectoryW(bp.c_str());
+    RemoveDirectoryW(cbp.c_str());
+    Check("backup write fails: bindings untouched", blocked + "/" + std::to_string(blocked70),
+          before + "/" + std::to_string(chtVk));
+    if (blocked != before) kx::RestoreHotkeys();
+    // Mac re-review P2: a malformed backup must fail closed: restore reports false, writes nothing
+    // from it and keeps the file (the user's original may still be recoverable by hand).
+    auto put = [](const std::wstring &p, const char *s) {
+      FILE *f = _wfopen(p.c_str(), L"wb");
+      if (f) { fputs(s, f); fclose(f); }
+    };
+    auto exists = [](const std::wstring &p) { return GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES; };
+    char valid[200];
+    snprintf(valid, sizeof valid,
+             "{\n \"modifiers\": %ld,\n \"virtual_key\": %ld,\n \"language_hotkey\": %ld,\n \"layout_hotkey\": %ld\n}\n",
+             reg(HK, L"Key Modifiers"), reg(HK, L"Virtual Key"), reg(TOG, L"Language Hotkey"), reg(TOG, L"Layout Hotkey"));
+    put(cbp, "{\n \"cht_modifiers\": 99999999999,\n \"cht_virtual_key\": 32\n}\n");
+    put(bp, valid);
+    bool r1 = kx::RestoreHotkeys();
+    Check("malformed CHT backup: restore false, file kept, 0x70 untouched",
+          std::to_string(r1) + "/" + std::to_string(exists(cbp)) + "/" + std::to_string(reg(HK70, L"Virtual Key")),
+          "0/1/" + std::to_string(chtVk));
+    DeleteFileW(cbp.c_str());
+    DeleteFileW(bp.c_str());
+    put(bp, "{\n \"modifiers\": 0,\n \"virtual_key\": 0,\n \"language_hotkey\": 1\n}\n");  // field missing
+    bool r2 = kx::RestoreHotkeys();
+    Check("malformed main backup: restore false, file kept, bindings untouched",
+          std::to_string(r2) + "/" + std::to_string(exists(bp)) + "/" + state(), "0/1/" + before);
+    DeleteFileW(bp.c_str());
+    put(bp, "{\n \"modifiers\": 0,\n \"virtual_key\": 0,\n \"language_hotkey\": 1\n}\n");
+    kx::TakeOverHotkeys();  // an invalid existing backup is rewritten from live values, never trusted
+    bool r3 = kx::RestoreHotkeys();  // sequenced: restore before observing state
+    std::string s3 = state();
+    Check("takeover rewrites a malformed backup", std::to_string(r3) + "/" + s3, "1/" + before);
+    DeleteFileW(bp.c_str());
+    DeleteFileW(cbp.c_str());
+    // Mac re-review 2 (46e9111) reproducers: partial values, duplicates of any type, truncation. Each
+    // alone must make restore return false, write nothing (state and 0x70 unchanged) and keep the file.
+    struct Bad { bool cht; const char *name, *body; };
+    const Bad bads[] = {
+        {true, "cht exponent 32e1", "{\"cht_modifiers\":2,\"cht_virtual_key\":32e1}"},
+        {true, "cht fraction 32.5", "{\"cht_modifiers\":2,\"cht_virtual_key\":32.5}"},
+        {true, "cht duplicate string", "{\"cht_modifiers\":2,\"cht_virtual_key\":32,\"cht_virtual_key\":\"broken\"}"},
+        {true, "cht truncated", "{\"cht_modifiers\":2,\"cht_virtual_key\":32\n"},
+        {false, "main duplicate overflow",
+         "{\"modifiers\":2,\"virtual_key\":32,\"language_hotkey\":2,\"layout_hotkey\":2,\"virtual_key\":99999999999}"},
+        {false, "main duplicate string",
+         "{\"modifiers\":2,\"virtual_key\":32,\"language_hotkey\":2,\"layout_hotkey\":2,\"modifiers\":\"broken\"}"},
+        {false, "main truncated", "{\"modifiers\":2,\"virtual_key\":32,\"language_hotkey\":2,\"layout_hotkey\":2\n"},
+    };
+    for (auto &b : bads) {
+      const std::wstring &p = b.cht ? cbp : bp;
+      put(p, b.body);
+      bool r = kx::RestoreHotkeys();
+      std::string s = state();
+      long v70 = reg(HK70, L"Virtual Key");
+      Check(std::string("malformed ") + b.name + ": fail closed",
+            std::to_string(r) + "/" + std::to_string(exists(p)) + "/" + s + "/" + std::to_string(v70),
+            "0/1/" + before + "/" + std::to_string(chtVk));
+      DeleteFileW(p.c_str());
+    }
+    // Compatibility: the exact files the writer produces (including "time") still restore.
+    put(bp, valid);
+    {
+      std::string withTime = std::string(valid);
+      withTime.insert(2, "\"time\": \"2026-11-07T00:00:00\",\n ");
+      put(bp, withTime.c_str());
+    }
+    bool rv = kx::RestoreHotkeys();
+    std::string sv = state();
+    Check("valid backup with time restores", std::to_string(rv) + "/" + std::to_string(exists(bp)) + "/" + sv,
+          "1/0/" + before);
+    DeleteFileW(bp.c_str());
+    DeleteFileW(cbp.c_str());
   }
   // 0.1.7 language bar button: text and GDI icon follow ascii_mode, and the button is a tray item.
   {
@@ -304,6 +512,8 @@ int main() {
     auto v = kx::Load(kx::UserDir() + L"\\bad.json");
     return v["page_size"] + "/" + v["english_space"];
   }(), "9/long");
-  printf(fails ? "%d FAIL\n" : "ALL PASS\n", fails);
+  Check("hotkeys at exit equal start (incl. ImmGetHotKey 0x70)", LiveHotkeys(), hotkeysAtStart);
+  if (gaps) printf("%d SHARED GAP (open, owned by the shared engine; not a pass)\n", gaps);
+  printf(fails ? "%d FAIL\n" : "ALL PASS (Windows)\n", fails);
   return fails ? 1 : 0;
 }

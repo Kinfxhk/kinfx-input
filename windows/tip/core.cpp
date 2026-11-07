@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <map>
 #include <regex>
 #include <sstream>
 #include <vector>
@@ -112,6 +113,10 @@ static FILETIME Stamp(const std::wstring &path) {
 static const wchar_t *kHotKeys = L"Control Panel\\Input Method\\Hot Keys\\00000010";
 static const wchar_t *kToggle = L"Keyboard Layout\\Toggle";
 
+// The self-test (build.cmd sets KX_USER) must not leave global side effects: Start/Reload skip the
+// hotkey takeover there and the shape lock uses a private cell (Mac review 2026-11-06, P1).
+static bool SelfTest() { return GetEnvironmentVariableW(L"KX_USER", nullptr, 0) != 0; }
+
 std::wstring HotkeyBackup() { return UserDir() + L"\\hotkeys-backup.json"; }
 
 // -1 when the value is absent (restore then removes it again). The window hotkey is REG_BINARY (a
@@ -161,9 +166,140 @@ static void NotifyInputChanged() {
   SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM)L"Keyboard Layout", SMTO_ABORTIFHUNG, 1000, nullptr);
 }
 
+// IME_THOTKEY_IME_NONIME_TOGGLE (0x70, Traditional Chinese): Ctrl+Space toggles the IME open state in
+// win32k before TSF sees it. Measured on the host (Notepad 11.2607, Edge, VS Code): the key sink never
+// got Ctrl+Space while 0x70 was set, and did as soon as 0x70 was cleared. The registry copy is only read
+// at logon, so the live table goes through ImmSetHotKey (which also updates the registry). The original
+// is kept in its own backup file, so a pre-existing hotkeys-backup.json stays the user's original.
+static const DWORD kChtToggle = 0x70;
+static std::wstring ChtHotkeyBackup() { return UserDir() + L"\\hotkeys-backup-cht.json"; }
+typedef BOOL(WINAPI *ImmGetHotKeyFn)(DWORD, UINT *, UINT *, HKL *);
+typedef BOOL(WINAPI *ImmSetHotKeyFn)(DWORD, UINT, UINT, HKL);
+static HMODULE Imm() { static HMODULE m = LoadLibraryW(L"imm32.dll"); return m; }
+static bool ChtGet(UINT *mod, UINT *vk) {
+  auto f = Imm() ? (ImmGetHotKeyFn)GetProcAddress(Imm(), "ImmGetHotKey") : nullptr;
+  HKL h = nullptr;
+  *mod = *vk = 0;
+  return f && f(kChtToggle, mod, vk, &h);  // FALSE = not assigned
+}
+static bool ChtSet(UINT mod, UINT vk) {
+  auto f = Imm() ? (ImmSetHotKeyFn)GetProcAddress(Imm(), "ImmSetHotKey") : nullptr;
+  return f && f(kChtToggle, mod, vk, nullptr);
+}
+
+// A backup is usable only when it reads back with the fields restore needs. Takeover clears a binding
+// only after that holds: a failed or truncated write must never leave the user's original unrecoverable
+// (Mac review 2026-11-06, P1). The whole file must be exactly one flat JSON object of the shape the
+// writer below produces: known keys only, each exactly once, integers with 1-10 digits and no
+// fraction/exponent, "time" a plain string, nothing after the closing brace. Anything else is
+// malformed and fails closed (Mac re-review 2026-11-07, P2).
+struct BackupField {
+  bool isString = false;
+  long long n = 0;
+};
+static bool ParseFlatJson(const std::string &t, const std::vector<std::string> &intKeys,
+                          const std::vector<std::string> &strKeys, std::map<std::string, BackupField> *out) {
+  size_t i = 0;
+  auto ws = [&] { while (i < t.size() && (t[i] == ' ' || t[i] == '\t' || t[i] == '\r' || t[i] == '\n')) ++i; };
+  auto str = [&](std::string *s) {
+    if (i >= t.size() || t[i] != '"') return false;
+    size_t j = ++i;
+    while (i < t.size() && t[i] != '"') {
+      unsigned char c = (unsigned char)t[i];
+      if (c == '\\' || c < 0x20) return false;  // the writer never escapes; refuse rather than guess
+      ++i;
+    }
+    if (i >= t.size()) return false;
+    *s = t.substr(j, i - j);
+    ++i;
+    return true;
+  };
+  auto has = [](const std::vector<std::string> &v, const std::string &k) {
+    for (auto &x : v) if (x == k) return true;
+    return false;
+  };
+  std::map<std::string, BackupField> m;
+  ws();
+  if (i >= t.size() || t[i++] != '{') return false;
+  ws();
+  if (i < t.size() && t[i] == '}') return false;  // empty object is never a backup
+  for (;;) {
+    std::string k;
+    ws();
+    if (!str(&k) || m.count(k)) return false;  // every duplicate is fatal, whatever its value
+    ws();
+    if (i >= t.size() || t[i++] != ':') return false;
+    ws();
+    BackupField fld;
+    if (has(strKeys, k)) {
+      std::string sv;
+      if (!str(&sv)) return false;
+      fld.isString = true;
+    } else if (has(intKeys, k)) {
+      bool neg = i < t.size() && t[i] == '-';
+      if (neg) ++i;
+      size_t j = i;
+      while (i < t.size() && t[i] >= '0' && t[i] <= '9') ++i;
+      size_t d = i - j;
+      if (d < 1 || d > 10 || (d > 1 && t[j] == '0')) return false;
+      if (i < t.size() && (t[i] == '.' || t[i] == 'e' || t[i] == 'E')) return false;
+      fld.n = std::stoll(t.substr(j, d));
+      if (neg) fld.n = -fld.n;
+    } else {
+      return false;  // unknown key
+    }
+    m[k] = fld;
+    ws();
+    if (i >= t.size()) return false;  // truncated
+    if (t[i] == ',') { ++i; continue; }
+    if (t[i] == '}') { ++i; break; }
+    return false;
+  }
+  ws();
+  if (i != t.size()) return false;  // trailing garbage
+  for (auto &k : intKeys) if (!m.count(k)) return false;
+  if (out) *out = m;
+  return true;
+}
+static bool ParseCht(const std::string &t, UINT *mod, UINT *vk) {
+  std::map<std::string, BackupField> m;
+  if (!ParseFlatJson(t, {"cht_modifiers", "cht_virtual_key"}, {}, &m)) return false;
+  long long mo = m["cht_modifiers"].n, v = m["cht_virtual_key"].n;
+  if (mo < 0 || mo > 0xFFFF || v < 1 || v > 0xFE) return false;  // a backup is only written for a set binding
+  *mod = (UINT)mo;
+  *vk = (UINT)v;
+  return true;
+}
+static bool ParseHotkeys(const std::string &t, std::map<std::string, long> *out) {
+  std::map<std::string, BackupField> m;
+  if (!ParseFlatJson(t, {"modifiers", "virtual_key", "language_hotkey", "layout_hotkey"}, {"time"}, &m)) return false;
+  std::map<std::string, long> v;
+  for (auto k : {"modifiers", "virtual_key", "language_hotkey", "layout_hotkey"}) {
+    long long n = m[k].n;
+    if (n < -1 || n > 0xFFFF) return false;  // -1 = value was absent when backed up
+    v[k] = (long)n;
+  }
+  if (out) *out = v;
+  return true;
+}static bool ChtBackupValid(const std::wstring &path) {
+  UINT m, v;
+  return ParseCht(ReadAll(path), &m, &v);
+}
+static bool HotkeyBackupValid(const std::wstring &path) { return ParseHotkeys(ReadAll(path), nullptr); }
 void TakeOverHotkeys() {
+  {
+    UINT mod = 0, vk = 0;
+    bool set = ChtGet(&mod, &vk) && vk;
+    std::wstring cb = ChtHotkeyBackup();
+    if (set && !ChtBackupValid(cb)) {  // absent or unreadable: (re)write the live original
+      char json[128];
+      snprintf(json, sizeof json, "{\n \"cht_modifiers\": %u,\n \"cht_virtual_key\": %u\n}\n", mod, vk);
+      WriteIfChanged(cb, json);
+    }
+    if (set && ChtBackupValid(cb)) ChtSet(0, 0);  // no verified backup: leave the binding alone
+  }
   std::wstring b = HotkeyBackup();
-  if (GetFileAttributesW(b.c_str()) == INVALID_FILE_ATTRIBUTES) {  // an existing backup is the user's original
+  if (!HotkeyBackupValid(b)) {  // an existing valid backup is the user's original
     SYSTEMTIME t;
     GetLocalTime(&t);
     char json[256];
@@ -174,6 +310,7 @@ void TakeOverHotkeys() {
              RegGet(kHotKeys, L"Virtual Key"), RegGet(kToggle, L"Language Hotkey"), RegGet(kToggle, L"Layout Hotkey"));
     WriteIfChanged(b, json);
   }
+  if (!HotkeyBackupValid(b)) return;  // cannot restore later: keep Windows' own bindings
   // 0 modifiers + 0 virtual key = the IME hotkey is unassigned. Language Hotkey 1 = Left Alt+Shift,
   // handed back to Windows (measured: 2 would be Ctrl+Shift, 3 None); Layout Hotkey 3 = None, so
   // Windows never claims the Ctrl+Shift that KINFX uses as its chord.
@@ -184,21 +321,43 @@ void TakeOverHotkeys() {
   if (changed) NotifyInputChanged();
 }
 
+// True only when every backed-up binding is live again. A backup is deleted only after its own values
+// read back from the live state; anything that failed stays on disk for the next restore attempt.
 bool RestoreHotkeys() {
-  std::string text = ReadAll(HotkeyBackup());
-  if (text.empty()) return false;
-  static const std::regex num("\"([a-z_]+)\"\\s*:\\s*(-?[0-9]+)");
-  std::map<std::string, long> v;
-  for (std::sregex_iterator it(text.begin(), text.end(), num), end; it != end; ++it) v[(*it)[1]] = std::stol((*it)[2]);
-  RegSet(kHotKeys, L"Key Modifiers", v.count("modifiers") ? v["modifiers"] : -1);
-  RegSet(kHotKeys, L"Virtual Key", v.count("virtual_key") ? v["virtual_key"] : -1);
-  RegSet(kToggle, L"Language Hotkey", v.count("language_hotkey") ? v["language_hotkey"] : -1, true);
-  RegSet(kToggle, L"Layout Hotkey", v.count("layout_hotkey") ? v["layout_hotkey"] : -1, true);
-  DeleteFileW(HotkeyBackup().c_str());
-  NotifyInputChanged();
-  return true;
+  bool ok = true, any = false;
+  {
+    std::wstring cb = ChtHotkeyBackup();
+    if (GetFileAttributesW(cb.c_str()) != INVALID_FILE_ATTRIBUTES) {
+      any = true;
+      UINT wm = 0, wv = 0, lm = 0, lv = 0;
+      if (!ParseCht(ReadAll(cb), &wm, &wv)) ok = false;  // malformed: keep it, report failure
+      else {
+        ChtSet(wm, wv);
+        if (ChtGet(&lm, &lv) && lm == wm && lv == wv) DeleteFileW(cb.c_str());
+        else ok = false;
+      }
+    }
+  }
+  std::wstring hb = HotkeyBackup();
+  if (GetFileAttributesW(hb.c_str()) != INVALID_FILE_ATTRIBUTES) {
+    any = true;
+    std::map<std::string, long> v;
+    if (!ParseHotkeys(ReadAll(hb), &v)) return false;  // malformed: touch nothing, keep the file
+    auto want = [&](const char *k) { return v[k]; };
+    RegSet(kHotKeys, L"Key Modifiers", want("modifiers"));
+    RegSet(kHotKeys, L"Virtual Key", want("virtual_key"));
+    RegSet(kToggle, L"Language Hotkey", want("language_hotkey"), true);
+    RegSet(kToggle, L"Layout Hotkey", want("layout_hotkey"), true);
+    bool live = RegGet(kHotKeys, L"Key Modifiers") == want("modifiers") &&
+                RegGet(kHotKeys, L"Virtual Key") == want("virtual_key") &&
+                RegGet(kToggle, L"Language Hotkey") == want("language_hotkey") &&
+                RegGet(kToggle, L"Layout Hotkey") == want("layout_hotkey");
+    if (live) DeleteFileW(hb.c_str());
+    else ok = false;
+    NotifyInputChanged();
+  }
+  return any && ok;
 }
-
 static void PrepareUserDir() {
   std::wstring u = UserDir(), shared = InstallDir() + L"\\data";
   CreateDirectoryW(u.c_str(), nullptr);
@@ -216,7 +375,7 @@ bool Start() {
   // The host app's DLL search path does not include our folder.
   if (!LoadLibraryExW((InstallDir() + L"\\rime.dll").c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH)) return false;
   PrepareUserDir();
-  TakeOverHotkeys();
+  if (!SelfTest()) TakeOverHotkeys();  // the self-test drives takeover/restore itself and restores
   std::string shared = Utf8(InstallDir() + L"\\data"), user = Utf8(UserDir()), log = user + "\\log";
   g_started = kx_start(shared.c_str(), user.c_str(), log.c_str(), 0) != 0;
   return g_started;
@@ -233,9 +392,68 @@ bool AsciiMode(uintptr_t sess) {
   return api && api->get_option && api->get_option((RimeSessionId)sess, "ascii_mode") != 0;
 }
 
+// 全形/半形 is one user-wide choice, as in Windows Quick: Shift+Space in one app holds in every app
+// and after switching back. The shared schema resets full_shape in each new Rime session (and every
+// app hosts its own engine), so the shell keeps the choice: a named LONG for the running logon
+// (1 = full, 2 = half, 0 = not loaded yet) plus HKCU\Software\KINFX Input\FullShape for the next one.
+// An AppContainer app cannot open either; it simply keeps the schema default.
+static const wchar_t *kShapeKey = L"Software\\KINFX Input";
+// The self-test (KX_USER set) gets a private cell and no registry, so it never flips the user's choice.
+static bool ShapeTest() { return SelfTest(); }
+static volatile LONG *ShapeCell() {
+  static volatile LONG *cell = []() -> volatile LONG * {
+    std::wstring name = ShapeTest() ? L"Local\\KINFXInputShapeTest" + std::to_wstring(GetCurrentProcessId()) : L"Local\\KINFXInputShape";
+    HANDLE m = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, sizeof(LONG), name.c_str());
+    if (!m) return nullptr;  // the handle stays open for the life of the process
+    return (volatile LONG *)MapViewOfFile(m, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(LONG));
+  }();
+  return cell;
+}
+
+int ShapeWanted() {
+  volatile LONG *c = ShapeCell();
+  LONG v = c ? *c : 0;
+  if (v != 1 && v != 2 && !ShapeTest()) {
+    long r = RegGet(kShapeKey, L"FullShape");
+    v = r == 1 ? 1 : r == 0 ? 2 : 0;
+    if (c && v) InterlockedCompareExchange(c, v, 0);
+  }
+  return v == 1 ? 1 : v == 2 ? 0 : -1;
+}
+
+static RimeApi *Api() {
+  static RimeApi *api = rime_get_api();
+  return api;
+}
+
+bool ApplyShape(uintptr_t sess) {
+  RimeApi *api = Api();
+  int want = ShapeWanted();
+  if (!sess || want < 0 || !api || !api->get_option || !api->set_option) return false;
+  bool full = api->get_option((RimeSessionId)sess, "full_shape") != 0;
+  if (full == (want == 1)) return false;
+  api->set_option((RimeSessionId)sess, "full_shape", want == 1);
+  return true;
+}
+
+// Only the user's toggle key publishes. Any other change of the session's full_shape (the shared
+// Lua's own first-key restore from kinfx_full_shape.state, a schema reset) is not a user choice:
+// the held value is put back instead, so an ordinary key can never overwrite another app's newer pick.
+bool NoteShape(uintptr_t sess, bool toggleKey) {
+  RimeApi *api = Api();
+  if (!sess || !api || !api->get_option) return false;
+  bool full = api->get_option((RimeSessionId)sess, "full_shape") != 0;
+  int want = ShapeWanted();
+  if (want == (full ? 1 : 0)) return false;
+  if (!toggleKey) { ApplyShape(sess); return false; }
+  if (volatile LONG *c = ShapeCell()) InterlockedExchange(c, full ? 1 : 2);
+  if (!ShapeTest()) RegSet(kShapeKey, L"FullShape", full ? 1 : 0);
+  return true;
+}
+
 bool ReloadIfChanged() {
   if (!g_started) return false;
-  TakeOverHotkeys();  // idempotent; also repairs a binding something put back
+  if (!SelfTest()) TakeOverHotkeys();  // idempotent; also repairs a binding something put back
   std::wstring p = UserDir() + L"\\settings.json";
   FILETIME now = Stamp(p);
   if (CompareFileTime(&now, &g_stamp) == 0) return false;
