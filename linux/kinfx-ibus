@@ -14,6 +14,13 @@ import kxcore  # noqa: E402
 MASK = (IBus.ModifierType.SHIFT_MASK | IBus.ModifierType.LOCK_MASK | IBus.ModifierType.CONTROL_MASK
         | IBus.ModifierType.MOD1_MASK | IBus.ModifierType.SUPER_MASK | IBus.ModifierType.RELEASE_MASK)
 
+# A key carrying any of these modifier bits (or a key-release event) is a
+# shortcut / modifier gesture, never a literal app-side fallback the host
+# inserts as text (Ctrl+C inserts no 'c'). Such keys must not create the
+# app_fallback marker that keeps a failed owner's routing tail half-width.
+NOT_LITERAL = (IBus.ModifierType.CONTROL_MASK | IBus.ModifierType.MOD1_MASK
+               | IBus.ModifierType.SUPER_MASK | IBus.ModifierType.RELEASE_MASK)
+
 ENGINE = kxcore.Engine()
 
 # Bare Ctrl+Shift / Alt+Shift are chords, like the Windows shell: Windows/IBus would otherwise
@@ -27,6 +34,19 @@ MODS = {
 CHORDS = (1 | 2, 4 | 2)  # Ctrl+Shift, Alt+Shift
 
 
+def _printable_ascii(keyval):
+    """keyval -> True for an ASCII digit, False for an ASCII letter, None otherwise.
+
+    Mirrors mac InputController's app-side fallback detection (0x30-0x39 digit,
+    0x41-0x5A/0x61-0x7A letter); anything else is not a printable ASCII fallback.
+    """
+    if 0x30 <= keyval <= 0x39:
+        return True
+    if 0x41 <= keyval <= 0x5A or 0x61 <= keyval <= 0x7A:
+        return False
+    return None
+
+
 class KxEngine(IBus.Engine):
     __gtype_name__ = "KxEngine"
 
@@ -37,6 +57,7 @@ class KxEngine(IBus.Engine):
         self.mods = 0      # modifiers currently down
         self.peak = 0      # every modifier seen since the chord started
         self.dirty = False  # a real key broke the chord
+        self.secure = False
 
     def _chord(self, keyval, state):
         """Returns True when the key completed a bare chord (and the toggle was sent)."""
@@ -64,12 +85,23 @@ class KxEngine(IBus.Engine):
         return True
 
     def _session(self):
-        if not ENGINE.alive(self.sess):
+        if not self.sess or not ENGINE.owns(self.sess):
             self.sess = ENGINE.session()
-        return self.sess
+        return self.sess if (self.sess and ENGINE.alive(self.sess)) else 0
 
     def do_process_key_event(self, keyval, keycode, state):
+        if self.secure:
+            return False  # passwords / PINs / private input never enter Rime or its logs
         if not self._session():
+            # Native unavailable (failed-latched rebuild): the host app inserts an
+            # unhandled printable ASCII key literally (fallback2 contract). Record it
+            # so a later clear/blur of this failed owner keeps its latin/digit tail
+            # instead of revoking it (mirrors mac InputController noteAppFallback).
+            # Shortcuts (Ctrl/Alt/Super) and key releases are never literal fallback
+            # (e.g. Ctrl+C inserts no 'c'), so they must not create the marker.
+            is_digit = None if state & NOT_LITERAL else _printable_ascii(keyval)
+            if is_digit is not None and self.sess:
+                ENGINE.note_app_fallback(self.sess, is_digit)
             return False
         if self._chord(keyval, state):
             return True
@@ -108,21 +140,55 @@ class KxEngine(IBus.Engine):
     def do_focus_in(self):
         ENGINE.reload_if_changed()
 
+    def do_set_content_type(self, purpose, hints):
+        self.secure = (purpose in (IBus.InputPurpose.PASSWORD, IBus.InputPurpose.PIN)
+                       or bool(hints & IBus.InputHints.PRIVATE))
+        if self.secure:
+            self.do_focus_out()
+
     def do_focus_out(self):
-        if self.sess:  # ibus already committed the COMMIT-mode preedit (_update)
-            ENGINE.lib.kx_clear(self.sess)
+        self.mods = self.peak = 0
+        self.dirty = False  # releases from the old field must not complete a chord here
+        if ENGINE.alive(self.sess):  # ibus already committed the COMMIT-mode preedit (_update)
+            # kx_clear alone rearms assoc.lua's placeholder on update_notifier.
+            if ENGINE.property(self.sess, "kinfx_assoc_code"):
+                ENGINE.key(self.sess, IBus.KEY_Escape, 0)
+            ENGINE.clear(self.sess)
             ENGINE.commit(self.sess)  # drop: clearing flushes held top-outs, already in that preedit
+        else:
+            # Native unavailable (failed-latched rebuild): the owner is still
+            # finalizing this field, so revoke its idle routing reservation the
+            # same way a live clear would, without touching the dead native
+            # session. Reset/disable/secure all route through here.
+            ENGINE.clear(self.sess)
         self.update_preedit_text(IBus.Text.new_from_string(""), 0, False)
+        self.hide_auxiliary_text()
         self.hide_lookup_table()
+
+    def do_disable(self):
+        # Disabling the input method must not leave a composition for its next owner.
+        self.do_focus_out()
 
     def do_reset(self):
         self.do_focus_out()
 
+    def do_destroy(self):
+        # Release the owner's native session and unregister it from the engine on teardown.
+        if self.sess:
+            ENGINE.destroy(self.sess)
+            self.sess = 0
+
     def do_candidate_clicked(self, index, button, state):
-        # Same as pressing the label digit.
-        if self._session():
-            ENGINE.key(self.sess, ord(str((index + 1) % 10)), 0)
-            self._update()
+        # Only a primary-button selection; unrelated clicks must not type a digit.
+        if self.secure or button != 1 or state & NOT_LITERAL:
+            return
+        if not ENGINE.alive(self.sess):
+            return
+        _, _, _, cands = ENGINE.view(self.sess)
+        if not 0 <= index < min(9, len(cands)):
+            return
+        ENGINE.select_candidate(self.sess, index)
+        self._update()
 
 
 def main():

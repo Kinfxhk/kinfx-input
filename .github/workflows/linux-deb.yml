@@ -4,14 +4,21 @@ on:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    container: ubuntu:26.04
     steps:
-      - uses: actions/checkout@v4
-      - name: build deps
+      - name: install git (checkout needs it in the container)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y librime-dev librime-bin gcc python3 fakeroot dpkg-dev
-      - name: build
-        run: bash linux/build-deb.sh
+          apt-get update
+          apt-get install -y ca-certificates git
+      - uses: actions/checkout@v4
+      - name: build deps (librime 1.16 from noble+1, matching the .deb dep)
+        run: |
+          apt-get install -y librime-dev librime-bin librime-plugin-lua gcc python3 fakeroot dpkg-dev
+      - name: build (as non-root, so file-permission fail-closed tests behave like a real user)
+        run: |
+          useradd -m builder
+          chown -R builder:builder .
+          su builder -c "bash linux/build-deb.sh"
       - uses: actions/upload-artifact@v4
         with:
           name: kinfx-input-deb

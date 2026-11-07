@@ -9,7 +9,7 @@
 -- same phrase hold, same paging).
 --   * Space on a space-safe English word (>= 3 letters, not in
 --     kinfx_en_unsafe.txt, no Chinese phrase held) commits the word + " ".
---   * Comma / period on such a word commits the word; the punctuator follows.
+--   * A symbol on such a word stays ASCII; dot waits for a domain suffix.
 --   * Left Shift tap (english/commit_key) commits the raw letters.
 --   * Any other key first commits the pending buffer and then runs untouched,
 --     so the app ends up with the v0.4.1 text.
@@ -24,8 +24,52 @@ local kRejected = 0 -- the app gets the key (librime ProcessResult)
 local kAccepted = 1
 local kNoop = 2
 
--- 半形（預設）出 ASCII 標點；只有全形（Shift+Space）才出中文標點，同 Windows 速成一致。
+-- full_shape remains the user's Chinese punctuation preference. English
+-- commits must bypass librime's *global* ASCII-to-fullwidth ShapeFormatter.
 local function full_shape(env) return env.engine.context:get_option("full_shape") end
+local function remember_tail(ctx, text)
+  -- Punctuation/spacing alone keeps the last script (hello,?! / 好，。).
+  local tail = text and text:match("([A-Za-z\128-\255])[^A-Za-z\128-\255]*$")
+  if tail then
+    -- ASCII letters only: %a is LC_CTYPE-sensitive in some Lua builds and can
+    -- classify high (CJK) bytes as alphabetic under a non-C locale, flipping
+    -- a CJK tail to "latin". [A-Za-z] is locale-independent.
+    ctx:set_property("kinfx_punct_tail", tail:match("[A-Za-z]") and "latin" or "other")
+  end
+  -- Digit-led alphanumeric run (60cm, 12v, 2x6): a commit ending in a digit
+  -- marks the run so the next lowercase letter is a unit/word tail, not a
+  -- Sucheng code. A following lowercase letter keeps the flag; any other
+  -- commit (CJK, uppercase, symbol, space) clears it.
+  if text and text:match("%d$") then
+    ctx:set_property("kinfx_digit_tail", "1")
+  elseif not (text and text:match("[a-z]$")) then
+    ctx:set_property("kinfx_digit_tail", "")
+  end
+end
+
+local function commit_text(env, text, ascii)
+  local ctx = env.engine.context
+  -- ASCII letters only: %a is LC_CTYPE-sensitive in some Lua builds; a CJK
+  -- commit must never look "wide-bypassable" because a non-C locale told %a a
+  -- high byte is alphabetic. [A-Za-z] is locale-independent.
+  local wide = full_shape(env) and (ascii or (text and text:find("[A-Za-z]")))
+  -- Internal formatter bypass is not a user navigation transaction (a native
+  -- commit notifier can call this while its old association is still visible).
+  local internal = env.width_internal
+  env.width_internal = true
+  local ok, err = pcall(function()
+    if wide then ctx:set_option("full_shape", false) end
+    env.engine:commit_text(text)
+  end)
+  local restored, restore_err = true, nil
+  if wide then
+    restored, restore_err = pcall(function() ctx:set_option("full_shape", true) end)
+  end
+  env.width_internal = internal
+  if not ok then error(err) end
+  if not restored then error(restore_err) end
+  remember_tail(ctx, text)
+end
 local META_MASK = 0x10000000 -- kMetaMask (1 << 28)
 
 local function config_int(config, path, default)
@@ -54,6 +98,15 @@ local function user_file(name)
   end
   return dir .. "/" .. name
 end
+
+-- full_shape is now owned by the frontend (mac Engine.swift / linux kxcore.py):
+-- the engine keeps the authoritative global width, restores it on every new
+-- owner at creation and broadcasts it to every live owner after a toggle. The
+-- shared Lua only returns kNoop for Shift+Space so librime's key_binder flips
+-- the per-context option; the frontend observes that option change (the signal)
+-- and persists/broadcasts. No file I/O here — the frontend is the sole writer,
+-- so missing/invalid/unwritable state fails closed in one place, not silently
+-- in two.
 
 -- About 350 short words; small enough for a Lua set.
 local unsafe_cache = nil
@@ -173,6 +226,15 @@ end
 -- the app text equals v0.5.3 for every key sequence without that tap.
 local R = { alive = false, raw = "", defer = "", cap = 0 }
 
+-- One Lua VM serves multiple librime contexts. Processor, notifiers and hint
+-- filter must all select the state belonging to this context, not the last key.
+local states, next_state = {}, 0
+local function activate(env)
+  local id = env.engine.context:get_property("kinfx_english_state")
+  local state = states[id]
+  if state then S, R = state.run, state.rescue end
+end
+
 local function rescue_drop()
   R.alive, R.raw, R.defer, R.cap = false, "", "", 0
 end
@@ -201,7 +263,7 @@ local function flush(env)
   if R.alive then
     R.defer = R.defer .. text
   else
-    env.engine:commit_text(text)
+    commit_text(env, text)
   end
 end
 
@@ -210,7 +272,7 @@ local function rescue_end(env)
   local text = R.defer
   rescue_drop()
   if text ~= "" then
-    env.engine:commit_text(text)
+    commit_text(env, text)
   end
 end
 
@@ -315,9 +377,9 @@ local function commit_word(env, ctx, text)
   S.guard = true
   ctx:clear()
   S.guard = false
-  -- The held-dot path stores a 。 while it waits; 半形 (default) must commit ASCII.
-  if text and not full_shape(env) then text = (text:gsub("。", ".")) end
-  env.engine:commit_text(text)
+  -- 。 is only the held-dot sentinel here, never final English punctuation.
+  if text then text = text:gsub("。", ".") end
+  commit_text(env, text)
 end
 
 -- v0.5.10: "." / "-" after an English word waits for the next key. A letter
@@ -392,7 +454,13 @@ local function shift_text(env, raw)
   if lower then
     return text
   end
-  return env.names[raw] or (word_text(env.names_mem, raw)) or raw
+  text = env.names[raw] or (word_text(env.names_mem, raw)) or raw
+  -- The preview and actual Shift/blur commit must use the same case rule.
+  -- A dictionary acronym is not permission to shout an unlisted typed run.
+  if text ~= raw and text == raw:upper() and not env.names[raw] then
+    return raw
+  end
+  return text
 end
 
 -- An unknown word (raw ran past every kinfx_en prefix): Space commits the raw
@@ -439,9 +507,9 @@ local function read_env(env)
   local on = pm.config_bool(config, "english/enable", true)
   env.smart = on and config_str(config, "english/mode", "smart") == "smart"
   env.space_mode = config_str(config, "english/space", "safe")
-  -- association/space: type (Space closes the list and types a space) | page
-  -- (Windows: Space pages the list and is swallowed).
-  env.assoc_space = config_str(config, "association/space", "page")
+  -- association/space: type (Space closes the list and types a space, default)
+  -- | page (Windows: Space pages the list and is swallowed).
+  env.assoc_space = config_str(config, "association/space", "type")
   -- association/paren_pick: false (default) = Shift+9 after a pick types （ and
   -- closes the list (HKEPC: 遊戲越獄（ came out 越獄訟) | true = Shift+9 picks slot 9.
   env.paren_pick = pm.config_bool(config, "association/paren_pick", false)
@@ -492,33 +560,199 @@ local function read_env(env)
   end
 end
 
+-- Navigation belongs to the owning menu, not to the Shift+Space key path.
+-- Engine::OnOptionUpdate refreshes every unconfirmed segment, including the
+-- empty association placeholder. Bracket that synchronous refresh so native
+-- punctuation still retranslates, then restore only the SAME candidate.
+local function width_tags(seg)
+  local tags = {}
+  for tag, present in pairs(seg.tags) do
+    -- Native navigation adds this transient tag; refresh intentionally drops
+    -- it. It is not part of the segment's translation/source identity.
+    if present and tag ~= "paging" then tags[#tags + 1] = tag end
+  end
+  table.sort(tags)
+  return table.concat(tags, "\31")
+end
+
+local function width_candidate(cand)
+  if not cand then return nil end
+  local genuine = cand:get_genuine()
+  return { text = cand.text, kind = cand.type, first = cand.start, last = cand._end,
+    source = genuine.type, class = genuine:get_dynamic_type() }
+end
+
+local function width_equal(a, b)
+  if not a or not b then return false end
+  for key, value in pairs(a) do
+    if value ~= b[key] then return false end
+  end
+  return true
+end
+
+local function width_owner(env, ctx)
+  local comp = ctx.composition
+  if not comp or comp:empty() then return nil end
+  local segments = comp:toSegmentation():get_segments()
+  local seg = segments[#segments]
+  if not seg or not seg.menu then return nil end
+  local prefix = {}
+  for i, part in ipairs(segments) do
+    prefix[#prefix + 1] = table.concat({part.start, part._end, width_tags(part)}, ":")
+    if i < #segments then
+      local cand = part:get_selected_candidate()
+      prefix[#prefix + 1] = part.status .. ":" .. (cand and cand.text or "")
+    end
+  end
+  return { session = env.state_id, state = ctx:get_property("kinfx_english_state"),
+    schema = env.engine.schema.schema_id, input = ctx.input, caret = ctx.caret_pos,
+    code = ctx:get_property("kinfx_assoc_code"), generation = env.width_generation,
+    segments = table.concat(prefix, "\30") }, seg
+end
+
+local function width_init(env, ctx)
+  env.width_generation = 0
+  local function invalidate()
+    env.width_generation = env.width_generation + 1
+    env.width_saved = nil
+  end
+  env.width_commit_conn = ctx.commit_notifier:connect(invalidate, 0)
+  env.width_select_conn = ctx.select_notifier:connect(invalidate, 0)
+  env.width_property_conn = ctx.property_update_notifier:connect(function(_, name)
+    if name == "kinfx_assoc_code" then invalidate() end
+  end, 0)
+  env.width_pre_conn = ctx.option_update_notifier:connect(function(c, name)
+    if name ~= "full_shape" then return end
+    env.width_saved = nil
+    if env.width_restoring or env.width_internal then return end
+    local ok, saved = pcall(function()
+      local owner, seg = width_owner(env, c)
+      if not owner then return nil end
+      local index = seg.selected_index -- absolute index in THIS menu, not genuines
+      local candidate = width_candidate(seg:get_candidate_at(index))
+      if not candidate then return nil end
+      return { owner = owner, index = index, candidate = candidate }
+    end)
+    if ok then env.width_saved = saved end
+  end, 0) -- before the engine's ungrouped refresh slot
+  env.width_post_conn = ctx.option_update_notifier:connect(function(c, name)
+    if name ~= "full_shape" then return end
+    local saved = env.width_saved
+    env.width_saved = nil -- one shot, consumed even on mismatch/error/recursion
+    if not saved or env.width_restoring or env.width_internal then return end
+    env.width_restoring = true
+    pcall(function()
+      local owner, seg = width_owner(env, c)
+      if not width_equal(saved.owner, owner) then return end
+      -- Prepare the rebuilt lazy menu at the absolute index before comparing.
+      local candidate = width_candidate(seg:get_candidate_at(saved.index))
+      if not width_equal(saved.candidate, candidate) then return end
+      c:highlight(saved.index) -- native update; no page-key replay or status lie
+    end)
+    env.width_restoring = false
+  end)
+end
+
 local blur_text -- below blur()
+local inline_plan, finish_plan -- below blur(); native raw ASCII ownership only
+local publish_display -- below blur(); presentation only, never a commit plan
 
 local function init(env)
   pm.init(env)
   read_env(env)
   env.shift_down = false
+  next_state = next_state + 1
+  env.state_id = tostring(next_state)
+  states[env.state_id] = {
+    run = { raw = "", pending = "", tracking = false, guard = false, known = 0, known_en = 0 },
+    rescue = { alive = false, raw = "", defer = "", cap = 0 },
+  }
+  env.engine.context:set_property("kinfx_english_state", env.state_id)
+  activate(env)
   reset()
-  -- 0.1.4: what F35 would commit, kept up to date for shells that hand it over before focus leaves (IBus)
+  local ctx = env.engine.context
+  ctx:set_property("kinfx_punct_tail", "")
+  ctx:set_property("kinfx_digit_tail", "")
+  width_init(env, ctx)
+  -- Native CommitComposition bypasses processors. Consume only a proven raw
+  -- inline snapshot before the engine's ungrouped formatter slot; after clear
+  -- that slot reads empty text, so the immutable plan reaches the sink once.
+  env.inline_commit_conn = ctx.commit_notifier:connect(function(c)
+    activate(env)
+    local plan = inline_plan(env, c)
+    if plan then finish_plan(env, plan) end
+  end, 0)
+  -- Option refresh is synchronous. Preserve an idle app-tail only inside that
+  -- transaction, not until the next key (an external clear must still clear it).
+  env.tail_option_pre_conn = ctx.option_update_notifier:connect(function(c, name)
+    -- Preserve only this exact native raw span when ascii_mode turns off;
+    -- the engine synchronously retranslates it as Chinese afterwards. Any
+    -- edit/clear invalidates this one-shot origin snapshot in update_notifier.
+    if name == "ascii_mode" then
+      local plan = inline_plan(env, c)
+      env.inline_origin = plan and plan.input or nil
+    end
+    env.punct_mode_command = (name == "full_shape" or name == "ascii_mode")
+      and not c:is_composing() and (c.input or "") == ""
+  end, 0)
+  env.tail_option_post_conn = ctx.option_update_notifier:connect(function()
+    env.punct_mode_command = false
+  end)
+  -- Native commits (uppercase/URL/email, Chinese picks, mouse selection) do
+  -- not call commit_word. Observe committed text, never just input codes.
+  env.tail_commit_conn = ctx.commit_notifier:connect(function(c)
+    activate(env)
+    local text = c:get_commit_text()
+    remember_tail(c, text)
+    env.punct_committing = true
+  end, 0)
+  env.tail_update_conn = ctx.update_notifier:connect(function(c)
+    activate(env)
+    if (c.input or "") == "" then
+      -- A CJK commit opens an association update right after its commit-clear;
+      -- that update is still the commit's own cascade, not an independent
+      -- clear, so it must not reset the script tail the commit just set. An
+      -- external clear/reset/focus-out/disable fires an empty-input update
+      -- with no association and must reset the tail.
+      if not env.punct_committing and not S.guard and not env.punct_mode_command
+         and (c:get_property("kinfx_assoc_code") or "") == "" then
+        c:set_property("kinfx_punct_tail", "")
+        c:set_property("kinfx_digit_tail", "")
+      end
+      -- Consume the one-shot commit guard once the commit's own update(s) ran,
+      -- so a later independent clear (its own empty-input update) resets the
+      -- tail instead of skipping it. Never deferred to the next key: a clear
+      -- can arrive before any next processor invocation.
+      env.punct_committing = false
+    end
+  end)
+  -- 0.1.4: kinfx_blur (what F35 would commit) is kept up to date for shells
+  -- that hand it over before focus leaves (IBus). The update_notifier fires
+  -- after the segmentors finalise the composition, so this sees both native
+  -- Latin (uppercase/url/email) and the advanced S.raw of a smart run.
   env.blur_conn = env.engine.context.update_notifier:connect(function(c)
+    activate(env)
+    if env.inline_origin ~= c.input then env.inline_origin = nil end
     c:set_property("kinfx_blur", blur_text(env, c))
+    publish_display(env, c)
   end)
   if not env.smart then
     return
   end
-  local ctx = env.engine.context
   -- A candidate picked with the mouse commits without a key event: send the
   -- pending top-outs first (grouped slots run before the engine's own).
   env.commit_conn = ctx.commit_notifier:connect(function(_)
+    activate(env)
     if not S.guard and (S.pending ~= "" or R.defer ~= "") then
       local text = R.defer .. S.pending
       reset()
       rescue_drop()
-      env.engine:commit_text(text)
+      commit_text(env, text)
     end
   end, 0)
   -- Composition cleared from outside (focus change, schema switch): drop the run.
   env.update_conn = ctx.update_notifier:connect(function(c)
+    activate(env)
     if not S.guard and (c.input or "") == "" then
       env.latin, env.latin_apos, env.dot = nil, false, nil
       reset()
@@ -530,6 +764,15 @@ local function init(env)
 end
 
 local function fini(env)
+  env.width_saved = nil
+  for _, name in ipairs({"width_pre_conn", "width_post_conn", "width_commit_conn",
+      "width_select_conn", "width_property_conn", "tail_option_pre_conn", "tail_option_post_conn",
+      "inline_commit_conn"}) do
+    if env[name] then env[name]:disconnect() end
+  end
+  states[env.state_id] = nil
+  if env.tail_commit_conn then env.tail_commit_conn:disconnect() end
+  if env.tail_update_conn then env.tail_update_conn:disconnect() end
   if env.blur_conn then
     env.blur_conn:disconnect()
   end
@@ -673,7 +916,7 @@ local function dispatch(key, env)
     if (ctx:get_property("kinfx_assoc_code") or "") ~= "" and (ctx.input or "") == "" then
       local text = read_clipboard()
       if text then
-        env.engine:commit_text(text)
+        commit_text(env, text)
         return kAccepted
       end
     end
@@ -699,6 +942,11 @@ local function dispatch(key, env)
   local repr = key:repr()
   local plain = not (key:ctrl() or key:alt() or key:super())
   if key:release() or kc == env.commit_code then
+    -- A width-toggle modifier release is not a rescue terminator either.
+    -- process clears/consumes the used Shift; retain the parked full run.
+    if kc == env.commit_code and key:release() and env.shift_used then
+      return process(key, env)
+    end
     -- Left Shift tap: the rescue wins unless the normal path holds a word.
     if kc == env.commit_code and key:release() and env.shift_down and not env.shift_used
        and not (S.tracking and S.raw ~= "" and word_known(env, S.raw)) then
@@ -712,7 +960,7 @@ local function dispatch(key, env)
       local text = R.defer
       rescue_drop()
       if text ~= "" then
-        env.engine:commit_text(text)
+        commit_text(env, text)
       end
     end
     return process(key, env)
@@ -821,59 +1069,261 @@ local function blur_english(env, ctx)
     or (S.tracking and #S.raw >= 3 and not chinese_held(ctx)))
 end
 
-local function blur(env)
-  local ctx = env.engine.context
-  if (ctx.input or "") ~= "" then
-    if blur_english(env, ctx) then
-      env.shift_down, env.shift_used = false, false
-      env.engine:process_key(KeyEvent("Shift_L"))
-      env.engine:process_key(KeyEvent("Release+Shift_L"))
-    else
-      env.engine:process_key(KeyEvent("Return"))
+-- A pure snapshot is shared by the property and the terminal blur action.
+-- Never dispatch synthetic keys here: Return can select only a prefix, and a
+-- subsequent clear used to silently discard everything after the caret.
+local function native_blur_text(ctx, input)
+  local comp = ctx.composition
+  local parts, pos = {}, 0
+  if comp and not comp:empty() then
+    local segments = comp:toSegmentation():get_segments()
+    for _, seg in ipairs(segments) do
+      local first, last = seg.start, seg._end
+      local cand = seg:get_selected_candidate()
+      if cand then first, last = cand.start, cand._end end
+      -- Segment offsets index the raw UTF-8 input, never the rendered preedit.
+      -- Refuse to consume corrupt ranges rather than calling a native substr
+      -- getter with an invalid composition. Leave the input live on failure.
+      if first < pos or last < first or last > #input then return nil end
+      parts[#parts + 1] = input:sub(pos + 1, first)
+      if not seg:has_tag("phony") then
+        parts[#parts + 1] = cand and cand.text or input:sub(first + 1, last)
+      end
+      pos = last
     end
   end
-  rescue_end(env)
-  flush(env)
+  parts[#parts + 1] = input:sub(pos + 1)
+  return table.concat(parts)
+end
+
+local function shape_blur_text(text, wide)
+  if not wide then return text end
+  -- Match librime ShapeFormatter (1.17): ASCII space and 0x21..0x7e only.
+  return (text:gsub("[ -~]", function(ch)
+    return utf8.char(ch == " " and 0x3000 or ch:byte() + 0xfee0)
+  end))
+end
+
+inline_plan = function(env, ctx)
+  local input = ctx.input or ""
+  if input == "" or #input > 2048 or input:find("[^ -~]")
+      or S.tracking or S.pending ~= "" or R.alive or R.defer ~= "" then return nil end
+  local comp = ctx.composition
+  if not comp or comp:empty() then return nil end
+  local segments = comp:toSegmentation():get_segments()
+  local pos, raw = 0, false
+  local origin = env.inline_origin == input
+  for _, seg in ipairs(segments) do
+    -- Only native ascii_segmentor raw text, never a guessed Chinese code,
+    -- selected prefix, recognizer token or an association placeholder.
+    if seg.start ~= pos or seg._end < pos or seg._end > #input
+        or seg.status == "kSelected" or seg.status == "kConfirmed" then return nil end
+    if not origin and (seg:get_selected_candidate() or not seg:has_tag("raw")) then return nil end
+    raw = raw or seg:has_tag("raw")
+    pos = seg._end
+  end
+  -- Compose segments only through the native caret. In ascii_mode its raw
+  -- segment owns the unchanged ASCII suffix too; never move the caret to End.
+  if (not raw and not origin) or (pos ~= #input
+      and not (ctx:get_option("ascii_mode") and pos == ctx.caret_pos)) then return nil end
+  -- A raw native span proves ASCII origin; punctuation follows the last
+  -- Latin letter within that span, not a document-tail observer. Digits and
+  -- spaces retain both their native width and the preceding script context.
+  local latin = false
+  local text = input:gsub("[ -~]", function(ch)
+    if ch:match("[A-Za-z]") then latin = true end
+    local punct = ch:match("[^A-Za-z0-9 ]") ~= nil
+    if not full_shape(env) or (latin and punct) then return ch end
+    return utf8.char(ch == " " and 0x3000 or ch:byte() + 0xfee0)
+  end)
+  return { text = text, valid = true, input = input }
+end
+
+local function blur_plan(env, ctx)
+  local inline = inline_plan(env, ctx)
+  if inline then return inline end
+  local input = ctx.input or ""
+  if input == "" then return { text = "", valid = true } end
+  local comp = ctx.composition
+  local seg = comp and not comp:empty() and comp:back()
+  -- Native recognizer tokens use the ASCII-preserving Return path too; they
+  -- are not covered by latin_token(), which intentionally excludes URL starts.
+  local native_latin = seg and (seg:has_tag("uppercase") or seg:has_tag("url")
+    or seg:has_tag("email"))
+  -- A highlighted candidate is still only a guess, but an explicitly selected
+  -- prefix belongs to the user. Never replace it with the original short codes
+  -- or a stale tracked English run when focus leaves. librime-lua exposes
+  -- Segment.status as enum names, not the underlying C++ numeric values.
+  local selected = false
+  if comp and not comp:empty() then
+    for _, part in ipairs(comp:toSegmentation():get_segments()) do
+      if (part.status == "kSelected" or part.status == "kConfirmed")
+          and part._end > part.start then
+        selected = true
+        break
+      end
+    end
+  end
+  local english = native_latin or (not selected and blur_english(env, ctx))
+  local raw
+  if not english then
+    local native = native_blur_text(ctx, input)
+    if not native then return { text = "", valid = false } end
+    raw = R.defer .. S.pending .. native
+  else
+    local run = S.tracking and S.raw ~= ""
+    if R.alive and not (run and word_known(env, S.raw)) then
+      raw = R.raw
+    elseif #input <= 2 and input:match("^[a-z]+$") and env.blur_short ~= "commit"
+        and not (S.tracking and #S.raw > 2) then
+      raw = R.defer .. input
+    elseif env.latin then
+      raw = input
+    elseif run then
+      raw = R.defer .. shift_text(env, S.raw)
+    elseif input:match("^[a-z]+$") and not ctx:get_option("ascii_mode") then
+      raw = R.defer .. input
+    else
+      local native = native_blur_text(ctx, input)
+      if not native then return { text = "", valid = false } end
+      raw = R.defer .. S.pending .. native
+    end
+    -- Held-dot sentinel has the same meaning as in commit_word.
+    raw = raw:gsub("。", ".")
+  end
+  return { text = shape_blur_text(raw, full_shape(env) and not english), valid = true }
+end
+
+finish_plan = function(env, plan)
+  local ctx = env.engine.context
+  if not plan.valid then return kAccepted end -- do not clear unrepresented input
+  env.shift_down, env.shift_used = false, false
+  env.rshift_down, env.rshift_used, env.assoc_tap = false, false, false
   env.latin, env.latin_apos, env.dot = nil, false, nil
+  reset()
+  rescue_drop()
+  ctx:set_property("kinfx_assoc_code", "")
   S.guard = true
   ctx:clear()
   S.guard = false
-  reset()
+  -- The plan already includes width conversion. Bypass the formatter once,
+  -- only after clear, so toggling the option cannot retranslate live input.
+  if plan.text ~= "" then
+    local wide = full_shape(env)
+    if wide then ctx:set_option("full_shape", false) end
+    env.engine:commit_text(plan.text)
+    if wide then ctx:set_option("full_shape", true) end
+  end
+  ctx:set_property("kinfx_blur", "")
+  ctx:set_property("kinfx_punct_tail", "")
+  ctx:set_property("kinfx_digit_tail", "")
   return kAccepted
 end
 
--- What blur() commits, read without committing: the Left Shift tap paths in
--- dispatch / process for an English run, else the Return path (top-outs, then the composition).
+local function blur(env)
+  -- Immutable value before clear or any option/update notifier runs.
+  return finish_plan(env, blur_plan(env, env.engine.context))
+end
+
 function blur_text(env, ctx)
+  return blur_plan(env, ctx).text
+end
+
+-- Pure, bounded presentation snapshot. The virtual held prefix is read-only:
+-- only the native tail has editable raw offsets. A tail byte caret maps by
+-- adding the displayed prefix length; no inverse mapping into parked text is
+-- claimed. Navigation/backspace still run the existing processor (which ends
+-- rescue); never move the native caret or manufacture keys to match the view.
+local function display_plan(s)
+  local invalid = { valid = false }
+  if not s.smart or s.selected or s.native_latin or not s.input:match("^[a-z]+$")
+      or #s.input > 2048 or s.caret < 0 or s.caret > #s.input then return invalid end
+  local prefix, tail = s.defer .. s.pending, s.input
+  if s.letters then
+    local raw = s.rescue and not s.known and s.rescue_raw
+      or (s.tracking and s.raw ~= "" and s.raw or nil)
+    if raw then
+      if raw:sub(-#s.input) ~= s.input then return invalid end
+      prefix = (s.rescue and not s.known) and "" or s.defer
+      tail = raw
+    end
+  end
+  -- No ownership gap: ordinary native compositions remain untouched.
+  if prefix == "" and tail == s.input then return invalid end
+  local text, cursor
+  if s.letters then
+    text = prefix .. tail
+    cursor = #text - #s.input + s.caret
+  else
+    if prefix == "" or s.native_cursor < 0 or s.native_cursor > #s.native_text then return invalid end
+    text = prefix .. s.native_text
+    cursor = #prefix + s.native_cursor
+  end
+  if #text > 2048 or text:find("[%z\1-\31\127]") or not utf8.len(text)
+      or cursor < 0 or cursor > #text
+      or (cursor < #text and text:byte(cursor + 1) >= 128
+          and text:byte(cursor + 1) < 192) then return invalid end
+  return { valid = true, text = text, cursor = cursor }
+end
+
+publish_display = function(env, ctx)
   local input = ctx.input or ""
-  if input == "" then
-    return ""
+  local selected, native_latin, ranges_valid = false, false, true
+  local comp = ctx.composition
+  if comp and not comp:empty() then
+    for _, seg in ipairs(comp:toSegmentation():get_segments()) do
+      selected = selected or seg.status == "kSelected" or seg.status == "kConfirmed"
+      native_latin = native_latin or seg:has_tag("uppercase") or seg:has_tag("url") or seg:has_tag("email")
+      local cand = seg:get_selected_candidate()
+      if seg.start < 0 or seg._end < seg.start or seg._end > #input
+          or (cand and (cand.start < 0 or cand._end < cand.start or cand._end > #input)) then
+        ranges_valid = false
+      end
+    end
   end
-  if not blur_english(env, ctx) then
-    return S.pending .. ctx:get_commit_text()
-  end
-  if #input <= 2 and input:match("^[a-z]+$") and env.blur_short ~= "commit" then
-    return input
-  end
-  if env.latin then
-    return input
-  end
-  local run = S.tracking and S.raw ~= ""
-  if R.alive and not (run and word_known(env, S.raw)) then
-    return R.raw
-  end
-  if run then
-    return R.defer .. shift_text(env, S.raw)
-  end
-  if input:match("^[a-z]+$") and not ctx:get_option("ascii_mode") then
-    return R.defer .. input
-  end
-  return R.defer .. S.pending .. ctx:get_commit_text()
+  -- Avoid native preedit access for invalid ranges (the bridge's native API
+  -- has its own validity limitations, outside this presentation contract).
+  local eligible = ranges_valid and env.smart and not selected and not native_latin
+    and input:match("^[a-z]+$") and #input <= 2048
+  local native = eligible and (env.letters and { text = "", caret_pos = 0 }
+    or ((R.defer .. S.pending) ~= "" and ctx:get_preedit())) or nil
+  local plan = native and display_plan {
+    smart = env.smart, letters = env.letters, input = input, caret = ctx.caret_pos,
+    selected = selected, native_latin = native_latin,
+    native_text = native.text, native_cursor = native.caret_pos,
+    tracking = S.tracking, raw = S.raw, pending = S.pending,
+    rescue = R.alive, rescue_raw = R.raw, defer = R.defer,
+    known = S.tracking and S.raw ~= "" and word_known(env, S.raw),
+  } or { valid = false }
+  -- One atomic versioned record, capped before publication. The C bridge
+  -- checks owner + exact native input/caret again, never kx_property's 4KB API.
+  ctx:set_property("kinfx_display", plan.valid and table.concat({
+    "1", env.state_id, input, tostring(ctx.caret_pos), tostring(plan.cursor), plan.text,
+  }, "\n") or "")
 end
 
 local function func(key, env)
+  -- Width is a mode command, not an English terminator. It must bypass dot,
+  -- deferred punctuation and rescue dispatch too, before any of them commits.
+  -- Mark the physical Shift as used so its later release is not a tap, and
+  -- cancel the association tap without closing/rebuilding the candidate menu.
+  if not key:release() and key.keycode == 0x20 and key:shift() then
+    env.assoc_tap = false
+    if env.shift_down then env.shift_used = true end
+    if env.rshift_down then env.rshift_used = true end
+    -- The key_binder flips full_shape after this processor returns; the frontend
+    -- observes that option change and broadcasts/persists it (see kxcore.py /
+    -- Engine.swift). Nothing to persist here — the frontend is the sole writer.
+    return kNoop -- the original key_binder still owns full_shape
+  end
   if key.keycode == BLUR and not key:release() then
     return blur(env)
+  end
+  local ctx = env.engine.context
+  if not key:release() and key.keycode == 0xff0d
+      and not (key:ctrl() or key:alt() or key:super()) then
+    local plan = inline_plan(env, ctx)
+    if plan then return finish_plan(env, plan) end
   end
   local r0 = dot_key(env, key)
   if r0 then
@@ -881,6 +1331,21 @@ local function func(key, env)
   end
   local kc0 = key.keycode
   local ctx0 = env.engine.context
+  local seg0 = ctx0.composition and not ctx0.composition:empty() and ctx0.composition:back()
+  local native_latin = seg0 and (seg0:has_tag("uppercase") or seg0:has_tag("url") or seg0:has_tag("email"))
+  -- These keys end native Latin just as they end a smart English word. Keep
+  -- uppercase token continuations (-_+.'), and URL/email syntax, composing.
+  -- Clear
+  -- before bypassing ShapeFormatter: toggling its option on an active native
+  -- composition would retranslate iPhone as Sucheng codes.
+  if native_latin and not key:release() and not (key:ctrl() or key:alt() or key:super())
+     and (kc0 == 0x2c or kc0 == 0x3b or kc0 == 0x29 or kc0 == 0x5d or kc0 == 0x7d
+       or (is_symbol(kc0) and seg0:has_tag("uppercase")
+           and not ("-_+.'"):find(string.char(kc0), 1, true))
+       or kc0 == 0xff0d) then
+    commit_word(env, ctx0, ctx0:get_commit_text() .. (kc0 < 0x80 and string.char(kc0) or ""))
+    return kAccepted
+  end
   if not env.latin and not key:release() and not (key:ctrl() or key:alt() or key:super())
      and (kc0 == 0x2c or kc0 == 0x2e or kc0 == 0x5d or kc0 == 0x7d) and latin_token(ctx0) then
     local input = ctx0.input
@@ -890,8 +1355,8 @@ local function func(key, env)
       set_input(ctx0, input .. ".")
       return kAccepted
     end
-    commit_word(env, ctx0, input) -- llama.cpp, / 」: the token, then the punctuator
-    return kNoop
+    commit_word(env, ctx0, input .. string.char(kc0))
+    return kAccepted
   end
   local fallback = env.latin
   if fallback then
@@ -926,6 +1391,39 @@ local function func(key, env)
   if r == kNoop then
     period_topout(env, key)
   end
+  -- Run existing token/selection paths first: an English end key may just
+  -- have committed, whereas a live two-code menu still belongs to Chinese.
+  local ctx = env.engine.context
+  if r == kNoop and not key:release() and not (key:ctrl() or key:alt() or key:super())
+     and is_symbol(key.keycode) and not ctx:is_composing()
+     and ctx:get_property("kinfx_punct_tail") == "latin" then
+    commit_text(env, string.char(key.keycode), true)
+    return kAccepted
+  end
+  -- Space is always half-width, independent of full_shape and the preceding
+  -- script (idle, CJK, English, digits, or consecutive spaces): it bypasses the
+  -- full-shape formatter, so even under full_shape a space stays U+0020.
+  -- ascii_mode space is already half-width (Fix A owns the ASCII path), so
+  -- leave its handled flag untouched. A composing Space is paging, not a
+  -- literal space: key_binder converts it to Page_Down before this path, so
+  -- the not ctx:is_composing() guard leaves candidate paging untouched.
+  if r == kNoop and not key:release() and not (key:ctrl() or key:alt() or key:super())
+     and key.keycode == 0x20 and not ctx:is_composing() and not ctx:get_option("ascii_mode") then
+    commit_text(env, " ", true)
+    return kAccepted
+  end
+  -- A leading slash starts an ASCII command (/init, /yolo): the command leader
+  -- stays half-width under full_shape (the same ASCII-path contract as English
+  -- after punctuation), and it sets the Latin tail so the command's trailing
+  -- punctuation follows that context. A slash after CJK still follows
+  -- full_shape (好/ -> 好／): tail == "other" there, so it falls through.
+  if r == kNoop and not key:release() and not (key:ctrl() or key:alt() or key:super())
+     and key.keycode == 0x2f and not ctx:is_composing()
+     and ctx:get_property("kinfx_punct_tail") == "" then
+    commit_text(env, "/", true)
+    ctx:set_property("kinfx_punct_tail", "latin")
+    return kAccepted
+  end
   return r
 end
 
@@ -935,6 +1433,7 @@ function process(key, env)
   -- Compare keycodes, not repr: Weasel sends "Shift+Shift_L" for the press
   -- and "Shift+Release+Shift_L" for the release on a real keyboard.
   local kc = key.keycode
+
 
   -- Left Shift tap while the association list shows: close it (Windows) and
   -- swallow the tap so ascii_composer does not switch to English.
@@ -1066,11 +1565,6 @@ function process(key, env)
     if tap and S.tracking and S.raw ~= "" then
       -- the raw letters (or a listed name: openai -> OpenAI) replace the held top-outs
       local text = shift_text(env, S.raw)
-      -- an unlisted run must not be shouted: abcd stays abcd. Only a real name
-      -- entry (or a mixed-case dictionary form) may change the case.
-      if text ~= S.raw and text == S.raw:upper() and not env.names[S.raw] then
-        text = S.raw
-      end
       commit_word(env, ctx, text)
       return kAccepted
     end
@@ -1111,13 +1605,23 @@ function process(key, env)
   local plain = not (key:ctrl() or key:alt() or key:super())
   local input = ctx.input or ""
 
+  -- A standalone digit stays half-width under full_shape: the global
+  -- ShapeFormatter would otherwise turn 60cm into ６０cm. Only when nothing
+  -- is composing — a digit inside a code, or an open association list, still
+  -- selects a candidate and must reach the selector.
+  if plain and not key:release() and repr:match("^[0-9]$") and input == ""
+     and not S.tracking and not assoc_active(ctx) then
+    commit_text(env, repr, true)
+    return kAccepted
+  end
+
   if plain and repr == "BackSpace" and S.tracking and S.raw ~= "" then
     backspace(env, ctx)
     return kAccepted
   end
 
   if plain and repr:match("^[a-z]$") then
-    -- S is shared by every session (one Lua state): a run with nothing composed here is another session's
+    -- An externally cleared composition cannot keep a tracked English run.
     if S.tracking and input == "" then
       reset()
     end
@@ -1144,11 +1648,31 @@ function process(key, env)
       if assoc_active(ctx) then
         close_assoc(ctx)
       end
+      if ctx:get_property("kinfx_digit_tail") == "1" then
+        -- A lowercase letter right after a digit is a unit/word tail (60cm,
+        -- 12v, 2x6): output it literally, keep the digit-led flag alive, never
+        -- start a Sucheng code run. Pure lowercase with no leading digit still
+        -- types Sucheng (速成優先).
+        commit_text(env, repr, true)
+        return kAccepted
+      end
       start_run(ctx, repr)
       return kAccepted
     end
     if not input:match("^[a-z]+$") then
       flush(env)
+      -- A lowercase letter after a multi-letter ALL-CAPS abbreviation starts
+      -- a new Sucheng code (MLG設計元素). Commit the abbreviation so the
+      -- recognizer's `[A-Z][-_+.'0-9A-Za-z]*` pattern cannot swallow the code
+      -- letters. Single-capital words (Edition, Docking) still keep their
+      -- lowercase tail: one capital is ambiguous with a word.
+      local cseg = ctx.composition and not ctx.composition:empty() and ctx.composition:back()
+      if cseg and cseg:has_tag("uppercase") then
+        local _, caps = input:gsub("[A-Z]", "")
+        if caps >= 2 and not input:match("[a-z]") then
+          commit_word(env, ctx, input)
+        end
+      end
       return kNoop
     end
     -- v0.4.1 step for this letter, commits held in S.pending.
@@ -1210,9 +1734,10 @@ function process(key, env)
   -- v0.5.9: ] / } (」 』) end a word like , and . ([1 nudification ]1 typed 乙寸灼曾芍乞); keycode
   -- so Shift+bracketright (Linux / macOS) and Weasel's braceright both match
   -- 0.1.1: Enter ? ! : ; ) too (hello Enter, /model Enter, thanks?); Enter commits with no newline, like Chinese
-  local endkey = plain and (repr == "space" or repr == "comma" or repr == "period"
-    or repr == "Return" or kc == 0x5d or kc == 0x7d
-    or kc == 0x3f or kc == 0x21 or kc == 0x3a or kc == 0x3b or kc == 0x29)
+  -- Once this is an English word, every typed symbol is ASCII. Dot/hyphen/
+  -- contraction continuation rules above still run first; Chinese menus still
+  -- retain their number/Space/arrow/equal bindings.
+  local endkey = plain and (repr == "space" or repr == "Return" or is_symbol(kc))
   if endkey and space_allowed(env, S.raw) and (#S.raw > 2 or repr == "space") and not chinese_held(ctx) then
     local text = space_text(env, S.raw)
     if text then
@@ -1227,8 +1752,8 @@ function process(key, env)
       if kc == 0x2e then
         return hold_latin(env, ctx, S.raw, ".", text .. "。") -- openai.com, not OpenAI.com
       end
-      commit_word(env, ctx, text)
-      return kNoop -- the punctuator types the comma / period
+      commit_word(env, ctx, text .. string.char(kc))
+      return kAccepted
     end
   end
   if endkey and unknown_space_ok(env, ctx) then
@@ -1243,8 +1768,8 @@ function process(key, env)
     if kc == 0x2e then
       return hold_latin(env, ctx, S.raw, ".", S.raw .. "。")
     end
-    commit_word(env, ctx, S.raw)
-    return kNoop
+    commit_word(env, ctx, S.raw .. string.char(kc))
+    return kAccepted
   end
   flush(env)
   return kNoop
@@ -1257,6 +1782,7 @@ local function filter_init(env)
 end
 
 local function filter_func(input, env)
+  activate(env)
   -- The hint rides on the first candidate's comment, never on seg.prompt:
   -- a prompt is drawn inside the inline preedit, and clients that commit the
   -- preedit (Fcitx5 on focus change / IM switch) wrote it into the document.
@@ -1299,9 +1825,59 @@ end
 
 return {
   processor = { init = init, fini = fini, func = function(key, env)
-    local r = func(key, env)
+    activate(env)
     local ctx = env.engine.context
+    -- Native ascii_composer rejects idle letters, but full_shape's postprocessor
+    -- may still sink them (without commit_notifier). Observe only that literal
+    -- route, never an association placeholder or uncommitted inline preedit.
+    local kc = key.keycode
+    local meta = math.floor(key.modifier / META_MASK) % 2 == 1
+    local plain = not (key:ctrl() or key:alt() or key:super() or meta)
+    local modifier = kc >= 0xffe1 and kc <= 0xffee and kc ~= 0xffe5 and kc ~= 0xffe6
+    local mode_command = kc == 0x20 and not (key:alt() or key:super() or meta)
+      and ((key:ctrl() and not key:shift()) or (key:shift() and not key:ctrl()))
+    -- A bare Ctrl-down is not yet an edit. Classify its actual chord instead:
+    -- Ctrl+Space/Shift+Space do not move the document caret; shortcuts do.
+    if not key:release() and not mode_command
+       and ((not modifier and not plain) or key:alt() or key:super()
+         or kc == 0xff08 or kc == 0xffff or kc == 0xff1b
+         or (kc >= 0xff50 and kc <= 0xff58)) then
+      ctx:set_property("kinfx_punct_tail", "")
+      ctx:set_property("kinfx_digit_tail", "")
+    end
+    if not key:release() and plain and ctx:get_option("ascii_mode")
+       and not ctx:is_composing() and (ctx.input or "") == ""
+       and ctx:get_property("kinfx_assoc_code") == ""
+       and ((kc >= 0x41 and kc <= 0x5a) or (kc >= 0x61 and kc <= 0x7a)) then
+      ctx:set_property("kinfx_punct_tail", "latin")
+      -- ascii_mode letters are Western text and stay half-width even under
+      -- full_shape (全角); ascii_composer would otherwise sink them fullwidth.
+      local ch = string.char(kc)
+      if key:shift() then ch = ch:upper() end
+      commit_text(env, ch, true)
+      return kAccepted
+    end
+    local r = func(key, env)
+    -- A genuine newline resets the whole script context for the next line: it
+    -- ends a digit-led run (60cm CR vd1 -> 60cm CR 好) AND clears the preceding
+    -- script tail, so the next line resumes CJK — punctuation is full-width
+    -- (hello CR , -> hello CR ，) and a leading / is a half-width command slash
+    -- (好 CR / -> 好 CR /). A confirm Return (hello/PS5) commits inside func and
+    -- returns kAccepted, keeping its Latin/digit semantics. `r == kNoop` is this
+    -- processor's own pass-through, not the final chain result: the only kNoop
+    -- Return the chain actually swallows (no CR) is Shift+Return while the
+    -- association list is open (the selector consumes it), so exclude exactly
+    -- that one — Shift+Return idle is a real CR and must revoke too. Placed
+    -- after func so a confirm Return (hello/PS5 -> tail latin) is not undone;
+    -- a deferred dot/dash Return returns kNoop, so it IS cleared (a newline).
+    if r == kNoop and not key:release()
+       and (kc == 0xff0d or kc == 0xff8d)
+       and plain and not (key:shift() and assoc_active(ctx)) then
+      ctx:set_property("kinfx_digit_tail", "")
+      ctx:set_property("kinfx_punct_tail", "")
+    end
     ctx:set_property("kinfx_blur", blur_text(env, ctx))
+    publish_display(env, ctx)
     return r
   end },
   filter = { init = filter_init, func = filter_func },

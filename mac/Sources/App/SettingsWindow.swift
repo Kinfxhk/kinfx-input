@@ -4,6 +4,7 @@ import Cocoa
 final class SettingsWindow: NSWindow {
   private let engine: Engine
   private var popups: [String: NSPopUpButton] = [:]
+  private var settingsObserver: NSObjectProtocol?
   private let status = NSTextField(labelWithString: "")
 
   init(engine: Engine) {
@@ -33,7 +34,12 @@ final class SettingsWindow: NSWindow {
     grid.columnSpacing = 12
 
     status.textColor = .secondaryLabelColor
-    status.stringValue = "變更即時生效。"
+    refreshStatus()
+    settingsObserver = NotificationCenter.default.addObserver(
+      forName: Engine.settingsStateChanged, object: nil, queue: nil) { [weak self] note in
+      guard let self = self, (note.object as? Engine) === self.engine else { return }
+      self.refreshStatus()
+    }
     let buttons = NSStackView(views: [
       NSButton(title: "說明", target: self, action: #selector(help)),
       NSButton(title: "關於", target: self, action: #selector(about)),
@@ -50,6 +56,18 @@ final class SettingsWindow: NSWindow {
     center()
   }
 
+  deinit { if let observer = settingsObserver { NotificationCenter.default.removeObserver(observer) } }
+
+  private func refreshStatus() {
+    switch engine.settingsState {
+    case .unchanged: status.stringValue = "變更會儲存；輸入中的文字完成後套用。"
+    case .applied: status.stringValue = "已套用。"
+    case .deferred: status.stringValue = "已儲存，等待輸入完成後套用。"
+    case .savedForActivation: status.stringValue = "已儲存，下次啟用輸入法時套用。"
+    case .failed: status.stringValue = "已儲存，但重載失敗；請重新選擇設定以重試。"
+    }
+  }
+
   @objc private func help() { AppInfo.showHelp() }
   @objc private func about() { AppInfo.showAbout() }
   @objc private func donate() { AppInfo.openDonate() }
@@ -62,7 +80,7 @@ final class SettingsWindow: NSWindow {
     }
     do {
       try engine.apply(s)
-      status.stringValue = "已套用。"
+      refreshStatus()
     } catch {
       status.stringValue = "儲存失敗：\(error.localizedDescription)"
     }

@@ -12,13 +12,15 @@ import Foundation
 /// Deliberately narrow, so ordinary Sucheng input is untouched:
 /// - only with Shift held (no Control/Option/Command),
 /// - only while a composition of 1–2 ASCII letters is pending,
-/// - only for a printable ASCII key (letters, digits, common punctuation).
+/// - only for a non-space printable ASCII key (letters, digits, common punctuation);
+///   Shift+Space is reserved for Rime's full_shape command.
 enum ShiftEnglish {
   static func shouldCommit(preedit: String, mods: RimeKeys.Mods, chars: String?) -> Bool {
     guard mods.contains(.shift) else { return false }
     guard !mods.contains(.control), !mods.contains(.option), !mods.contains(.command) else { return false }
     guard let chars = chars, chars.count == 1, let scalar = chars.unicodeScalars.first else { return false }
-    guard scalar.isASCII, scalar.value >= 0x20, scalar.value != 0x7f else { return false }
+    // Shift+Space belongs exclusively to Rime's full_shape toggle.
+    guard scalar.isASCII, scalar.value > 0x20, scalar.value != 0x7f else { return false }
     let code = preedit.trimmingCharacters(in: .whitespaces)
     guard (1...2).contains(code.count) else { return false }
     return code.allSatisfy { $0.isASCII && $0.isLetter }
@@ -31,7 +33,8 @@ enum ShiftEnglish {
   static func shouldTypeDirectly(chars: String?, mods: RimeKeys.Mods, continuing: Bool) -> Bool {
     guard mods.contains(.shift), !mods.contains(.control), !mods.contains(.option), !mods.contains(.command) else { return false }
     guard let chars = chars, chars.count == 1, let scalar = chars.unicodeScalars.first else { return false }
-    guard scalar.isASCII, scalar.value >= 0x20, scalar.value != 0x7f else { return false }
+    // Continuing Shift runs must not consume the full_shape shortcut either.
+    guard scalar.isASCII, scalar.value > 0x20, scalar.value != 0x7f else { return false }
     return continuing
   }
 }

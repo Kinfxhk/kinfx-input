@@ -12,12 +12,13 @@ final class KINFXInputController: IMKInputController {
   /// True while a Shift run is being typed literally, so later letters keep the
   /// case the OS produced instead of becoming new composition codes.
   private var shiftRun = false
+  private weak var candidateClient: AnyObject?
 
   private var engine: Engine { AppDelegate.engine }
 
   private func ensureSession() -> Bool {
-    if session == 0 || !engine.alive(session) { session = engine.newSession() }
-    return session != 0
+    if session == 0 || !engine.ownsSession(session) { session = engine.newSession() }
+    return engine.alive(session)
   }
 
   @objc(recognizedEvents:)
@@ -51,7 +52,7 @@ final class KINFXInputController: IMKInputController {
 
   @objc(handleEvent:client:)
   override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
-    Trace.log("handle type=\(event?.type.rawValue ?? 0) key=\(event?.keyCode ?? 0) chars=\(event?.characters ?? "") flags=\(String(event?.modifierFlags.rawValue ?? 0, radix: 16))")
+    Trace.log("handle type=\(event?.type.rawValue ?? 0) key=\(event?.keyCode ?? 0) chars=\((event?.type == .keyDown || event?.type == .keyUp) ? (event?.characters ?? "") : "") flags=\(String(event?.modifierFlags.rawValue ?? 0, radix: 16))")
     guard let event = event, let client = sender as? IMKTextInput, ensureSession() else { return false }
     let mods = Self.mods(event.modifierFlags)
     var handled = false
@@ -79,8 +80,29 @@ final class KINFXInputController: IMKInputController {
   }
 
   private func keyDown(_ keyCode: UInt16, _ chars: String?, _ bare: String?, _ mods: RimeKeys.Mods, _ sender: Any!) -> Bool {
+    // A printable letter/digit the engine cannot consume is inserted by the host
+    // app (fallback2 contract). Detect it up front so an unhandled key during a
+    // failed rebuild still records the app-side fallback for tail preservation.
+    let appFallbackDigit: Bool? = {
+      // A shortcut (Control/Option/Command) is never a literal app-side fallback:
+      // Ctrl+C inserts no 'c', so such keys must not create the routing marker
+      // (mirrors the linux kinfx-ibus NOT_LITERAL guard). Plain and Shift keys
+      // stay eligible — Shift+A still inserts 'A' literally.
+      if !mods.isDisjoint(with: [.control, .option, .command]) { return nil }
+      guard let u = chars?.unicodeScalars, u.count == 1, let c = u.first else { return nil }
+      if (0x30...0x39).contains(c.value) { return true }
+      if (0x41...0x5a).contains(c.value) || (0x61...0x7a).contains(c.value) { return false }
+      return nil
+    }()
     guard let client = sender as? IMKTextInput, ensureSession(),
-          let (k, m) = RimeKeys.keyDown(keyCode: keyCode, chars: chars, bare: bare, mods: mods) else { return false }
+          let (k, m) = RimeKeys.keyDown(keyCode: keyCode, chars: chars, bare: bare, mods: mods) else {
+      if let d = appFallbackDigit, session != 0 { engine.noteAppFallback(session, isAsciiDigit: d) }
+      return false
+    }
+
+    // Space (including Shift+Space's full_shape command) ends the literal run.
+    // Reset before the early-return branch so the next shifted key cannot reuse it.
+    if !mods.contains(.shift) || k == 0x20 { shiftRun = false }
 
     // Continuing a shifted run: type the key as-is (correct case with Caps Lock on
     // or off) instead of letting it start another composition.
@@ -92,7 +114,6 @@ final class KINFXInputController: IMKInputController {
       update(client)
       return true
     }
-    if !mods.contains(.shift) { shiftRun = false }
 
     // Shift + letter on a 1–2 code composition: commit the codes as English, then
     // type the letter. A bare Shift tap cannot be seen on this macOS (no
@@ -133,11 +154,19 @@ final class KINFXInputController: IMKInputController {
     client.setMarkedText(pre, selectionRange: NSRange(location: view.cursorUTF16, length: 0),
                          replacementRange: NSRange(location: NSNotFound, length: 0))
     if view.candidates.isEmpty {
-      AppDelegate.panel.hide()
+      candidateClient = nil
+      AppDelegate.panel.hide(owner: ObjectIdentifier(self))
     } else {
+      candidateClient = client as AnyObject
       var rect = NSRect.zero
       client.attributes(forCharacterIndex: 0, lineHeightRectangle: &rect)
-      AppDelegate.panel.show(view, below: rect, vertical: engine.settings["candidate_layout"] != "horizontal")
+      AppDelegate.panel.show(view, below: rect, vertical: engine.settings["candidate_layout"] != "horizontal",
+                             owner: ObjectIdentifier(self), refreshCaret: { [weak self] in
+        guard let client = self?.candidateClient as? IMKTextInput else { return nil }
+        var rect = NSRect.zero
+        client.attributes(forCharacterIndex: 0, lineHeightRectangle: &rect)
+        return rect
+      })
     }
   }
 
@@ -147,6 +176,7 @@ final class KINFXInputController: IMKInputController {
   }
 
   private func blur(_ client: IMKTextInput) {
+    candidateClient = nil
     let committed = engine.blur(session) ?? ""
     // The engine keeps the run normally; if focus loss already cleared it, fall back
     // to the letters the preedit showed so an unfinished English run survives.
@@ -156,7 +186,7 @@ final class KINFXInputController: IMKInputController {
     if !text.isEmpty {
       client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
     }
-    AppDelegate.panel.hide()
+    AppDelegate.panel.hide(owner: ObjectIdentifier(self))
   }
 
   override func activateServer(_ sender: Any!) {
@@ -166,8 +196,9 @@ final class KINFXInputController: IMKInputController {
   }
 
   override func deactivateServer(_ sender: Any!) {
+    candidateClient = nil
     if session != 0, let client = sender as? IMKTextInput { blur(client) }
-    AppDelegate.panel.hide()
+    AppDelegate.panel.hide(owner: ObjectIdentifier(self))
     super.deactivateServer(sender)
   }
 
