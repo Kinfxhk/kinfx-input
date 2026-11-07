@@ -38,7 +38,7 @@ TEST_DOWN = SOURCE.split("STDMETHODIMP OnTestKeyDown(", 1)[1].split("STDMETHODIM
 class ReturnNewlineSourceTests(unittest.TestCase):
     def test_claim_only_untagged_unhandled_return_with_open_composition(self):
         self.assertIn("newline_ = sym == 0xff0d && !up && !eaten && comp_ != nullptr && GetMessageExtraInfo() != kNewlineTag;", PROCESS)
-        self.assertIn("if (newline_) { eaten = true; endFailed_ = false; }", PROCESS)
+        self.assertIn("if (newline_) { eaten = true; endFailed_ = commitWritten_ = commitFailed_ = false; }", PROCESS)
         self.assertLess(PROCESS.index("eaten = kx_key(sess_, sym, m | (up ? kRelease : 0)) != 0;"),
                         PROCESS.index("newline_ = sym == 0xff0d"))
 
@@ -47,7 +47,7 @@ class ReturnNewlineSourceTests(unittest.TestCase):
         self.assertNotIn("FinishNewline", TEST_DOWN)  # fd02caa design (commit in test path) removed
 
     def test_resend_only_after_confirmed_commit(self):
-        guard = 'if (comp_ || endFailed_) { Trace("newline: commit not confirmed, Return swallowed"); return true; }'
+        guard = 'if (comp_ || endFailed_ || commitFailed_ || !commitWritten_) {'
         self.assertIn(guard, FINISH)
         self.assertLess(FINISH.index(guard), FINISH.index("SendInput("))
         self.assertLess(FINISH.index("newline_ = false;"), FINISH.index("SendInput("))
@@ -57,7 +57,19 @@ class ReturnNewlineSourceTests(unittest.TestCase):
         self.assertIn("const UINT sent = SendInput(2, in, sizeof(INPUT));", FINISH)
         self.assertIn("SendInput failed, newline lost", FINISH)
         self.assertIn("KEYEVENTF_EXTENDEDKEY", FINISH)  # keypad Enter keeps its identity
-        self.assertEqual(FINISH.count("SendInput("), 1)
+        # partial insertion (Mac review P3): key-down in -> newline delivered, key-up retried alone
+        self.assertIn("else if (sent == 1) {", FINISH)
+        self.assertIn("const UINT up = SendInput(1, &in[1], sizeof(INPUT));", FINISH)
+        self.assertEqual(FINISH.count("SendInput("), 2)
+
+    def test_commit_write_result_is_recorded(self):
+        # Mac review P2 on 606ee01: a refused GetRange/SetText must not count as a delivered commit.
+        write = SOURCE.split("  void Write(TfEditCookie ec, ITfContext *c,", 1)[1].split("    if (pre.empty()) {", 1)[0]
+        self.assertIn("if (SUCCEEDED(r->SetText(ec, 0, commit.c_str(), (LONG)commit.size()))) commitWritten_ = true;", write)
+        self.assertIn("else commitFailed_ = true;", write)
+        self.assertIn("if (!comp_) commitFailed_ = true;", write)  # Begin failed
+        self.assertIn("} else {\n          commitFailed_ = true;", write.replace("\r\n", "\n"))  # GetRange failed
+        self.assertIn("if (newline_) { eaten = true; endFailed_ = commitWritten_ = commitFailed_ = false; }", PROCESS)
 
     def test_end_composition_failure_is_recorded(self):
         self.assertIn("if (composition && FAILED(composition->EndComposition(ec))) endFailed_ = true;", END)
@@ -65,7 +77,7 @@ class ReturnNewlineSourceTests(unittest.TestCase):
     def test_flags_reset_and_declared(self):
         self.assertLess(PROCESS.index("if (same) return pendEaten_;"), PROCESS.index("newline_ = false;"))
         self.assertLess(PROCESS.index("newline_ = false;"), PROCESS.index("int sym = KeySym(w, l)"))
-        for f in ("newline_", "newlineExt_", "endFailed_"):
+        for f in ("newline_", "newlineExt_", "endFailed_", "commitWritten_", "commitFailed_"):
             self.assertIn(f, RESET)
         self.assertIn("static constexpr LPARAM kNewlineTag", SOURCE)
 

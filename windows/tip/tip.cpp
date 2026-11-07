@@ -524,7 +524,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
 
   void ResetInput() {
     ++generation_;
-    pending_ = pendUp_ = pendEaten_ = paste_ = switch_ = hint_ = cands_ = newline_ = newlineExt_ = endFailed_ = false;
+    pending_ = pendUp_ = pendEaten_ = paste_ = switch_ = hint_ = cands_ = newline_ = newlineExt_ = endFailed_ = commitWritten_ = commitFailed_ = false;
     pendW_ = 0;
     chord_ = KxChord();
     last_ = POINT{-1, -1}; lastH_ = 0;
@@ -701,7 +701,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
       // the result after the key, so the newline lands before the text (VM fd02caa). Claim it;
       // FinishNewline re-sends one tagged Return once the commit is really in the document.
       newline_ = sym == 0xff0d && !up && !eaten && comp_ != nullptr && GetMessageExtraInfo() != kNewlineTag;
-      if (newline_) { eaten = true; endFailed_ = false; }
+      if (newline_) { eaten = true; endFailed_ = commitWritten_ = commitFailed_ = false; }
       newlineExt_ = newline_ && ((l >> 24) & 1);
       // key_bindings: Shift+space toggles full_shape (the Ctrl chords never reach Rime here).
       if (kx::NoteShape(sess_, sym == 0x20 && (m & kShift) && !up)) Trace("shape held");
@@ -790,7 +790,8 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   }
 
   // The claimed Return (see Process), after Handle's Update. Only a commit that is really in the
-  // document (sync lock granted, EndComposition succeeded, our composition closed) gets the newline:
+  // document (sync lock granted, the commit's SetText accepted, EndComposition succeeded, our
+  // composition closed) gets the newline:
   // one Return is re-sent, tagged so it can never be claimed again, queued behind the app's own
   // handling of the commit. Otherwise (lock refused -> commit only queued async, or the end was
   // refused) the Return stays swallowed: text kept, that newline lost, never newline-before-text.
@@ -798,7 +799,10 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   bool FinishNewline() {
     if (!newline_) return false;
     newline_ = false;
-    if (comp_ || endFailed_) { Trace("newline: commit not confirmed, Return swallowed"); return true; }
+    if (comp_ || endFailed_ || commitFailed_ || !commitWritten_) {
+      Trace("newline: commit not confirmed, Return swallowed");
+      return true;
+    }
     INPUT in[2] = {};
     const DWORD ext = newlineExt_ ? KEYEVENTF_EXTENDEDKEY : 0;  // keypad Enter stays keypad Enter
     for (int i = 0; i < 2; i++) {
@@ -806,7 +810,12 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
       in[i].ki.dwFlags = ext | (i ? KEYEVENTF_KEYUP : 0); in[i].ki.dwExtraInfo = (ULONG_PTR)kNewlineTag;
     }
     const UINT sent = SendInput(2, in, sizeof(INPUT));
-    Trace(sent == 2 ? "newline: committed, Return re-sent" : "newline: SendInput failed, newline lost");
+    if (sent == 2) Trace("newline: committed, Return re-sent");
+    else if (sent == 1) {
+      // Only the key-down went in (the newline is delivered); never leave Return logically held.
+      const UINT up = SendInput(1, &in[1], sizeof(INPUT));
+      Trace(up == 1 ? "newline: re-sent, key-up retried" : "newline: re-sent, key-up lost");
+    } else Trace("newline: SendInput failed, newline lost");
     return true;
   }
 
@@ -928,16 +937,21 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     if (!commit.empty()) {
       if (!comp_) Begin(ec, c);
       if (generation != generation_ || !Same(c, owner_)) return;
+      if (!comp_) commitFailed_ = true;
       if (comp_) {
         comp_->AddRef();
         auto composition = Adopt(comp_);
         ITfRange *r = nullptr;
         if (SUCCEEDED(composition->GetRange(&r)) && r) {
-          r->SetText(ec, 0, commit.c_str(), (LONG)commit.size());
+          // Only a commit the document really accepted may release a claimed Return (FinishNewline).
+          if (SUCCEEDED(r->SetText(ec, 0, commit.c_str(), (LONG)commit.size()))) commitWritten_ = true;
+          else commitFailed_ = true;
           if (generation != generation_ || !Same(composition.get(), comp_)) { r->Release(); return; }
           r->Collapse(ec, TF_ANCHOR_END);
           SetSel(ec, c, r);
           r->Release();
+        } else {
+          commitFailed_ = true;
         }
         if (generation != generation_ || !Same(composition.get(), comp_)) return;
         End(ec);
@@ -1095,6 +1109,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   bool pending_ = false, pendUp_ = false, pendEaten_ = false, paste_ = false;
   bool newline_ = false, newlineExt_ = false;  // claimed Return: FinishNewline re-sends it after the commit
   bool endFailed_ = false;  // the host refused EndComposition since the claim
+  bool commitWritten_ = false, commitFailed_ = false;  // commit SetText accepted / refused since the claim
   static constexpr LPARAM kNewlineTag = 0x4B584E4C;  // 'KXNL' in dwExtraInfo: our own re-sent Return
   bool cands_ = false;  // candidates (incl. the association list) were showing on the last update
   WPARAM pendW_ = 0;
