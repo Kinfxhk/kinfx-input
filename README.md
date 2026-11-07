@@ -7,24 +7,24 @@
 
 **Android 版封閉測試招募中（名額有限，先到先得）** — Google Play 要求新開發者帳戶先完成 12 人 × 連續 14 天的封閉測試，所以想找真實用家幫忙試。想試就[用這個表單留下 Gmail](https://docs.google.com/forms/d/e/1FAIpQLSdvbBoJQNDaiJCzGrdQ1OkEcVN0wNLcTaekRPusxvGasP6kZw/viewform)，我會逐個加入測試名單；Play 審核通過後（通常一星期內）會收到測試連結。安裝後照平時打字，有問題回報即可，不需要寫評論。
 
-免費直裝包：Windows 用 [v0.1.10](https://github.com/Kinfxhk/kinfx-input/releases/tag/v0.1.10)（修正選字框殘留在畫面）；macOS／Linux 仍然是 [v0.1.5](https://github.com/Kinfxhk/kinfx-input/releases/tag/v0.1.5)。未簽名、未公證。設定只用視窗，不必改碼。
+免費直裝包（三平台）：[v0.1.11](https://github.com/Kinfxhk/kinfx-input/releases/tag/v0.1.11)（中英混打三平台一致修正）。未簽名、未公證。設定只用視窗，不必改碼。
 
 ## 安裝包
 
 ### macOS
 
-下載 `KINFX-Input-0.1.5-macOS.pkg`，雙擊安裝。輸入法會放到你的 `~/Library/Input Methods`，不用管理員權限。然後到系統設定 → 鍵盤 → 輸入法，加入 KINFX Input。
+下載 `KINFX-Input-0.1.11-macOS.pkg`，雙擊安裝。輸入法會放到你的 `~/Library/Input Methods`，不用管理員權限。然後到系統設定 → 鍵盤 → 輸入法，加入 KINFX Input。
 
 新裝可能要登出再登入一次，系統才會把按鍵交給新輸入法。MacBook Neo 用同一個包。
 
 ### Windows
 
-下載 [`KINFX-Input-0.1.10-Windows-x64.exe`](https://github.com/Kinfxhk/kinfx-input/releases/download/v0.1.10/KINFX-Input-0.1.10-Windows-x64.exe)，右鍵以系統管理員執行。安裝完成後，在工作列輸入法選 KINFX Input（速）。不依賴小狼毫。
+下載 [`KINFX-Input-0.1.11-Windows-x64.exe`](https://github.com/Kinfxhk/kinfx-input/releases/download/v0.1.11/KINFX-Input-0.1.11-Windows-x64.exe)，右鍵以系統管理員執行。安裝完成後，在工作列輸入法選 KINFX Input（速）。不依賴小狼毫。
 
 ### Linux（amd64，要 IBus）
 
 ```sh
-sudo apt install ./kinfx-input_0.1.5_amd64.deb
+sudo apt install ./kinfx-input_0.1.11_amd64.deb
 ibus restart
 ```
 
