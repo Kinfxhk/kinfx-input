@@ -6,10 +6,22 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: build deps
+      - name: build librime 1.17.0 from source (matches the .deb's librime1 >= 1.16 dep)
         run: |
           sudo apt-get update
-          sudo apt-get install -y librime-dev librime-bin gcc python3 fakeroot dpkg-dev
+          sudo apt-get install -y cmake g++ \
+            libboost-filesystem-dev libboost-system-dev libboost-regex-dev libboost-locale-dev \
+            libyaml-cpp-dev libglog-dev libutf8proc-dev libopencc-dev liblua5.4-dev libmarisa-dev
+          git clone --depth 1 --branch 1.17.0 https://github.com/rime/librime.git
+          cd librime
+          cmake -B build -DBUILD_TEST=OFF -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build build -j"$(nproc)"
+          sudo cmake --install build
+          sudo ldconfig
+      - name: build deps
+        run: |
+          sudo apt-get install -y librime-bin gcc python3 fakeroot dpkg-dev
       - name: build
         run: bash linux/build-deb.sh
       - uses: actions/upload-artifact@v4
