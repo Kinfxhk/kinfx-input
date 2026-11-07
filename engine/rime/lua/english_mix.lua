@@ -31,7 +31,10 @@ local function remember_tail(ctx, text)
   -- Punctuation/spacing alone keeps the last script (hello,?! / 好，。).
   local tail = text and text:match("([A-Za-z\128-\255])[^A-Za-z\128-\255]*$")
   if tail then
-    ctx:set_property("kinfx_punct_tail", tail:match("%a") and "latin" or "other")
+    -- ASCII letters only: %a is LC_CTYPE-sensitive in some Lua builds and can
+    -- classify high (CJK) bytes as alphabetic under a non-C locale, flipping
+    -- a CJK tail to "latin". [A-Za-z] is locale-independent.
+    ctx:set_property("kinfx_punct_tail", tail:match("[A-Za-z]") and "latin" or "other")
   end
   -- Digit-led alphanumeric run (60cm, 12v, 2x6): a commit ending in a digit
   -- marks the run so the next lowercase letter is a unit/word tail, not a
@@ -46,7 +49,10 @@ end
 
 local function commit_text(env, text, ascii)
   local ctx = env.engine.context
-  local wide = full_shape(env) and (ascii or (text and text:find("%a")))
+  -- ASCII letters only: %a is LC_CTYPE-sensitive in some Lua builds; a CJK
+  -- commit must never look "wide-bypassable" because a non-C locale told %a a
+  -- high byte is alphabetic. [A-Za-z] is locale-independent.
+  local wide = full_shape(env) and (ascii or (text and text:find("[A-Za-z]")))
   -- Internal formatter bypass is not a user navigation transaction (a native
   -- commit notifier can call this while its old association is still visible).
   local internal = env.width_internal
@@ -1852,6 +1858,24 @@ return {
       return kAccepted
     end
     local r = func(key, env)
+    -- A genuine newline resets the whole script context for the next line: it
+    -- ends a digit-led run (60cm CR vd1 -> 60cm CR 好) AND clears the preceding
+    -- script tail, so the next line resumes CJK — punctuation is full-width
+    -- (hello CR , -> hello CR ，) and a leading / is a half-width command slash
+    -- (好 CR / -> 好 CR /). A confirm Return (hello/PS5) commits inside func and
+    -- returns kAccepted, keeping its Latin/digit semantics. `r == kNoop` is this
+    -- processor's own pass-through, not the final chain result: the only kNoop
+    -- Return the chain actually swallows (no CR) is Shift+Return while the
+    -- association list is open (the selector consumes it), so exclude exactly
+    -- that one — Shift+Return idle is a real CR and must revoke too. Placed
+    -- after func so a confirm Return (hello/PS5 -> tail latin) is not undone;
+    -- a deferred dot/dash Return returns kNoop, so it IS cleared (a newline).
+    if r == kNoop and not key:release()
+       and (kc == 0xff0d or kc == 0xff8d)
+       and plain and not (key:shift() and assoc_active(ctx)) then
+      ctx:set_property("kinfx_digit_tail", "")
+      ctx:set_property("kinfx_punct_tail", "")
+    end
     ctx:set_property("kinfx_blur", blur_text(env, ctx))
     publish_display(env, ctx)
     return r
