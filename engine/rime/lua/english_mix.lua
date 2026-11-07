@@ -354,6 +354,13 @@ local function chinese_held(ctx)
   if S.pending ~= "" then
     return false
   end
+  -- A run whose whole length is an English/name prefix (npm, mac) is English,
+  -- not a held Chinese phrase. Fix 1 keeps the full prefix un-topped-out, so
+  -- the menu may still lead with a Chinese candidate for the 3-code input;
+  -- known_en tracks exactly that span, so do not let it read as Chinese here.
+  if S.raw ~= "" and S.known_en == #S.raw then
+    return false
+  end
   local input = ctx.input or ""
   if #input < 3 or not ctx:has_menu() then
     return false
