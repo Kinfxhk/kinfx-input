@@ -427,6 +427,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     EnsureContext(c);
     *eaten = Process(w, l, false);
     Tail(c);
+    if (FinishNewline(c)) { *eaten = TRUE; pendEaten_ = true; }
     // Paste: claim it here so OnKeyDown runs (sync edit session commits the held text), then OnKeyDown passes it to the app.
     if (paste_) *eaten = TRUE;
     return S_OK;
@@ -695,13 +696,11 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
       if (kx::ApplyShape(sess_)) Trace("shape applied");
       eaten = kx_key(sess_, sym, m | (up ? kRelease : 0)) != 0;
       // A Return Rime lets through while a preedit is open (deferred "hello." / "hello-") is a
-      // genuine newline (shared hello-dot-return): Rime committed the held text. Unclaimed, TSF
-      // hands the key to the app with the composition still open and the app spends it ending
-      // the composition, so no CR LF reached the document. Claim it in the test path only so
-      // OnKeyDown runs; Handle commits there first and then passes this same key on (no
-      // synthetic input, so nothing can overtake an async commit or re-enter this branch).
+      // genuine newline (shared hello-dot-return): Rime committed the held text. If the key
+      // reached the app with our composition still open, the app spent it ending the
+      // composition and no CR LF reached the document. The caller (FinishNewline) writes the
+      // commit first, in the same key event, and only then lets this same key through.
       newline_ = sym == 0xff0d && !up && !eaten && comp_ != nullptr;
-      if (newline_) eaten = true;
       // key_bindings: Shift+space toggles full_shape (the Ctrl chords never reach Rime here).
       if (kx::NoteShape(sess_, sym == 0x20 && (m & kShift) && !up)) Trace("shape held");
       Trace("key sym=" + std::to_string(sym) + " m=" + std::to_string(m) + (up ? " up" : "") + " eaten=" + (eaten ? "1" : "0"));
@@ -788,6 +787,21 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     Trace("hint [" + kx::Utf8(s) + "]");
   }
 
+  // The unhandled Return that closes a held preedit (see Process). Commit synchronously now, in
+  // this key event (as Tail does for Ctrl+Space), so the composition is closed before TSF hands the
+  // Return to the app, which then inserts the newline after the text. Nothing is synthesized: no
+  // re-sent key can overtake a queued commit, re-enter here or be lost. Returns true (swallow the
+  // Return) only when the composition is still ours afterwards (the app refused the sync lock and
+  // the commit is queued): the text is kept and that one newline is lost, never newline-first.
+  bool FinishNewline(ITfContext *c) {
+    if (!newline_) return false;
+    newline_ = false;
+    Update(c);
+    if (comp_) { Trace("newline: commit queued, Return swallowed"); return true; }
+    Trace("newline: committed, Return passed to app");
+    return false;
+  }
+
   bool Handle(ITfContext *c, WPARAM w, LPARAM l, bool up) {
     EnsureContext(c);
     bool eaten = Process(w, l, up);
@@ -796,18 +810,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     // closes the association list (Rime state changed) and must still reach the app.
     Update(c);
     if (hint_) { hint_ = false; ShowHint(); }
-    const bool newline = newline_ && !up && w == VK_RETURN;
-    newline_ = false;
-    if (newline) {
-      // Update above wrote the held text and closed our composition: the Return itself now
-      // belongs to the app (not eaten), so the app inserts the newline after the text.
-      // If the app refused the sync lock, the commit is only queued (async) and our composition
-      // is still open: letting the Return through could put the newline before the text, so it
-      // is swallowed instead (text kept, that one newline lost; the user presses Return again).
-      if (comp_) { Trace("newline: commit queued, Return swallowed"); return true; }
-      Trace("newline: committed, Return passed to app");
-      return false;
-    }
+    if (FinishNewline(c)) return true;
     if (paste_ && !up) {
       // TSF already ate this Ctrl+V (OnTestKeyDown); the held text is written, composition closed,
       // so a re-sent V reaches the app as a plain paste (paste_ needs comp_, now null).
@@ -1082,7 +1085,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   bool hint_ = false;  // a mode switch is waiting to be shown after the next Update
   bool switch_ = false;  // a mode switch happened in the test path: Tail() commits it
   bool pending_ = false, pendUp_ = false, pendEaten_ = false, paste_ = false;
-  bool newline_ = false;  // an unhandled Return closed a preedit: commit in OnKeyDown, then let it through
+  bool newline_ = false;  // an unhandled Return closes a preedit: FinishNewline commits, then lets it through
   bool cands_ = false;  // candidates (incl. the association list) were showing on the last update
   WPARAM pendW_ = 0;
 };
