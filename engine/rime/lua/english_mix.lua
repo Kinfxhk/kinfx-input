@@ -31,7 +31,10 @@ local function remember_tail(ctx, text)
   -- Punctuation/spacing alone keeps the last script (hello,?! / 好，。).
   local tail = text and text:match("([A-Za-z\128-\255])[^A-Za-z\128-\255]*$")
   if tail then
-    ctx:set_property("kinfx_punct_tail", tail:match("%a") and "latin" or "other")
+    -- ASCII letters only: %a is LC_CTYPE-sensitive in some Lua builds and can
+    -- classify high (CJK) bytes as alphabetic under a non-C locale, flipping
+    -- a CJK tail to "latin". [A-Za-z] is locale-independent.
+    ctx:set_property("kinfx_punct_tail", tail:match("[A-Za-z]") and "latin" or "other")
   end
   -- Digit-led alphanumeric run (60cm, 12v, 2x6): a commit ending in a digit
   -- marks the run so the next lowercase letter is a unit/word tail, not a
@@ -46,7 +49,10 @@ end
 
 local function commit_text(env, text, ascii)
   local ctx = env.engine.context
-  local wide = full_shape(env) and (ascii or (text and text:find("%a")))
+  -- ASCII letters only: %a is LC_CTYPE-sensitive in some Lua builds; a CJK
+  -- commit must never look "wide-bypassable" because a non-C locale told %a a
+  -- high byte is alphabetic. [A-Za-z] is locale-independent.
+  local wide = full_shape(env) and (ascii or (text and text:find("[A-Za-z]")))
   -- Internal formatter bypass is not a user navigation transaction (a native
   -- commit notifier can call this while its old association is still visible).
   local internal = env.width_internal
@@ -1852,6 +1858,20 @@ return {
       return kAccepted
     end
     local r = func(key, env)
+    -- A genuine newline ends a digit-led run: a plain unshifted Return /
+    -- KP_Enter that fell through (kNoop) reaches the app as CR, so the next
+    -- line's lowercase letters are Sucheng codes again, not a unit/word tail
+    -- (60cm CR vd1 -> 60cm CR 好). A confirm Return (hello/PS5) commits inside
+    -- func and returns kAccepted, keeping its Latin/digit semantics. `plain`
+    -- (no ctrl/alt/super/meta) + "not shift" excludes Shift+Return and every
+    -- shortcut chord, which are kNoop too but consumed downstream. Placed after
+    -- func so a same-key commit (hello. / hello- -> tail latin) is not undone
+    -- by a pre-func clear.
+    if r == kNoop and not key:release()
+       and (kc == 0xff0d or kc == 0xff8d)
+       and plain and not key:shift() then
+      ctx:set_property("kinfx_digit_tail", "")
+    end
     ctx:set_property("kinfx_blur", blur_text(env, ctx))
     publish_display(env, ctx)
     return r
