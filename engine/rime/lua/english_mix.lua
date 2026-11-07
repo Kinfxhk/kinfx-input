@@ -305,7 +305,11 @@ local function v041_letter(env, ctx, ch)
   end
   local extended = input .. ch
   if #input == 2 then
-    if pm.may_capture(env, extended) then
+    -- A listed name / English prefix (mac, ipad, imac, wifi …) must not top out
+    -- its first two letters: membership already promises English, so the third
+    -- key keeps the whole run Latin instead of committing "ma" -> 百 (B1).
+    if pm.may_capture(env, extended) or env.name_prefix[extended]
+       or pm.has_prefix(env.en_mem, extended) then
       set_input(ctx, extended)
       return true
     end

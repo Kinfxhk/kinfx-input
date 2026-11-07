@@ -530,3 +530,8 @@ copium	copium
 gg	gg
 wp	wp
 gl	gl
+# 電競 ID / 法律術語（0.1.12：細楷冷門英文唔再變中文）
+csgo	csgo
+uzi	Uzi
+mens	mens
+habeas	habeas
