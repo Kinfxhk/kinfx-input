@@ -1858,19 +1858,23 @@ return {
       return kAccepted
     end
     local r = func(key, env)
-    -- A genuine newline ends a digit-led run: a plain unshifted Return /
-    -- KP_Enter that fell through (kNoop) reaches the app as CR, so the next
-    -- line's lowercase letters are Sucheng codes again, not a unit/word tail
-    -- (60cm CR vd1 -> 60cm CR 好). A confirm Return (hello/PS5) commits inside
-    -- func and returns kAccepted, keeping its Latin/digit semantics. `plain`
-    -- (no ctrl/alt/super/meta) + "not shift" excludes Shift+Return and every
-    -- shortcut chord, which are kNoop too but consumed downstream. Placed after
-    -- func so a same-key commit (hello. / hello- -> tail latin) is not undone
-    -- by a pre-func clear.
+    -- A genuine newline resets the whole script context for the next line: it
+    -- ends a digit-led run (60cm CR vd1 -> 60cm CR 好) AND clears the preceding
+    -- script tail, so the next line resumes CJK — punctuation is full-width
+    -- (hello CR , -> hello CR ，) and a leading / is a half-width command slash
+    -- (好 CR / -> 好 CR /). A confirm Return (hello/PS5) commits inside func and
+    -- returns kAccepted, keeping its Latin/digit semantics. `r == kNoop` is this
+    -- processor's own pass-through, not the final chain result: the only kNoop
+    -- Return the chain actually swallows (no CR) is Shift+Return while the
+    -- association list is open (the selector consumes it), so exclude exactly
+    -- that one — Shift+Return idle is a real CR and must revoke too. Placed
+    -- after func so a same-key commit (hello. / hello- -> tail latin) is not
+    -- undone by a pre-func clear.
     if r == kNoop and not key:release()
        and (kc == 0xff0d or kc == 0xff8d)
-       and plain and not key:shift() then
+       and plain and not (key:shift() and assoc_active(ctx)) then
       ctx:set_property("kinfx_digit_tail", "")
+      ctx:set_property("kinfx_punct_tail", "")
     end
     ctx:set_property("kinfx_blur", blur_text(env, ctx))
     publish_display(env, ctx)
