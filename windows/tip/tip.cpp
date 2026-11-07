@@ -524,7 +524,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
 
   void ResetInput() {
     ++generation_;
-    pending_ = pendUp_ = pendEaten_ = paste_ = switch_ = hint_ = cands_ = newline_ = newlineExt_ = false;
+    pending_ = pendUp_ = pendEaten_ = paste_ = switch_ = hint_ = cands_ = newline_ = false;
     pendW_ = 0;
     chord_ = KxChord();
     last_ = POINT{-1, -1}; lastH_ = 0;
@@ -695,12 +695,13 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
       if (kx::ApplyShape(sess_)) Trace("shape applied");
       eaten = kx_key(sess_, sym, m | (up ? kRelease : 0)) != 0;
       // A Return Rime lets through while a preedit is open (deferred "hello." / "hello-") is a
-      // genuine newline (shared hello-dot-return): Rime committed the held text. Passing the key
-      // on would let the app spend it ending the composition, so no CR LF reached the document.
-      // Claim it here; Handle commits synchronously and then re-sends one Return.
+      // genuine newline (shared hello-dot-return): Rime committed the held text. Unclaimed, TSF
+      // hands the key to the app with the composition still open and the app spends it ending
+      // the composition, so no CR LF reached the document. Claim it in the test path only so
+      // OnKeyDown runs; Handle commits there first and then passes this same key on (no
+      // synthetic input, so nothing can overtake an async commit or re-enter this branch).
       newline_ = sym == 0xff0d && !up && !eaten && comp_ != nullptr;
       if (newline_) eaten = true;
-      newlineExt_ = newline_ && ((l >> 24) & 1);
       // key_bindings: Shift+space toggles full_shape (the Ctrl chords never reach Rime here).
       if (kx::NoteShape(sess_, sym == 0x20 && (m & kShift) && !up)) Trace("shape held");
       Trace("key sym=" + std::to_string(sym) + " m=" + std::to_string(m) + (up ? " up" : "") + " eaten=" + (eaten ? "1" : "0"));
@@ -798,15 +799,14 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     const bool newline = newline_ && !up && w == VK_RETURN;
     newline_ = false;
     if (newline) {
-      // The held text is in the document and the composition is closed (Update above), so this
-      // Return reaches the app as a plain newline; Rime sees it idle and lets it through again.
-      INPUT in[2] = {};
-      const DWORD ext = newlineExt_ ? KEYEVENTF_EXTENDEDKEY : 0;  // keypad Enter stays keypad Enter
-      in[0].type = INPUT_KEYBOARD; in[0].ki.wVk = VK_RETURN; in[0].ki.dwFlags = ext;
-      in[1].type = INPUT_KEYBOARD; in[1].ki.wVk = VK_RETURN; in[1].ki.dwFlags = ext | KEYEVENTF_KEYUP;
-      SendInput(2, in, sizeof(INPUT));
-      Trace("newline: committed held text, re-sent Return");
-      return true;
+      // Update above wrote the held text and closed our composition: the Return itself now
+      // belongs to the app (not eaten), so the app inserts the newline after the text.
+      // If the app refused the sync lock, the commit is only queued (async) and our composition
+      // is still open: letting the Return through could put the newline before the text, so it
+      // is swallowed instead (text kept, that one newline lost; the user presses Return again).
+      if (comp_) { Trace("newline: commit queued, Return swallowed"); return true; }
+      Trace("newline: committed, Return passed to app");
+      return false;
     }
     if (paste_ && !up) {
       // TSF already ate this Ctrl+V (OnTestKeyDown); the held text is written, composition closed,
@@ -1082,7 +1082,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   bool hint_ = false;  // a mode switch is waiting to be shown after the next Update
   bool switch_ = false;  // a mode switch happened in the test path: Tail() commits it
   bool pending_ = false, pendUp_ = false, pendEaten_ = false, paste_ = false;
-  bool newline_ = false, newlineExt_ = false;  // an unhandled Return closed a preedit: re-send it after the commit
+  bool newline_ = false;  // an unhandled Return closed a preedit: commit in OnKeyDown, then let it through
   bool cands_ = false;  // candidates (incl. the association list) were showing on the last update
   WPARAM pendW_ = 0;
 };
