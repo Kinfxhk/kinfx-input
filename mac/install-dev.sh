@@ -31,6 +31,15 @@ done
 pkill -f "$DEST/Contents/MacOS/KINFXInput" || true
 rm -rf "$DEST"
 cp -R "build/KINFX Input.app" "$DEST"
+# 安裝前先清走同 bundle id 嘅舊 registration（build／舊 dev 目錄殘留），否則
+# 輸入法選單會顯示多個 KINFX Input。只留正式 $DEST。
+LSREG=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+"$LSREG" -dump 2>/dev/null | grep -E '^path:' | sed -E 's/^path: +//; s/ +\(0x[0-9a-f]+\)$//' \
+  | grep -F 'KINFX Input.app' \
+  | while IFS= read -r p; do
+      [[ "$p" == "$DEST" ]] && continue
+      "$LSREG" -u "$p" 2>/dev/null || true
+    done
 swiftc -O tools/kx-tis.swift -o build/kx-tis 2>/dev/null
 build/kx-tis register "$DEST"
 for pair in "${LISTS[@]}"; do

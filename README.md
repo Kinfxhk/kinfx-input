@@ -4,7 +4,7 @@
 
 香港繁體速成輸入法，獨立直裝版。引擎（librime + KINFX 速成詞庫）已封入程式，毋須另裝小狼毫、鼠鬚管或 Fcitx。候選字次序與 Windows 11 微軟速成逐頁一致，打英文毋須切換模式。
 
-**最新版本：[v0.1.11](https://github.com/Kinfxhk/kinfx-input/releases/tag/v0.1.11)**（macOS／Windows／Linux）
+**最新版本：[v0.1.12](https://github.com/Kinfxhk/kinfx-input/releases/tag/v0.1.12)**（macOS／Windows／Linux）
 
 > 想用新版本，請用這個 repo。舊的 Rime 方案包 [KINFX IME](https://github.com/Kinfxhk/kinfx-ime)（v0.5.12）已進入維護模式，不再新增功能。
 
@@ -34,18 +34,18 @@
 
 ### macOS
 
-下載 [`KINFX-Input-0.1.11-macOS.pkg`](https://github.com/Kinfxhk/kinfx-input/releases/download/v0.1.11/KINFX-Input-0.1.11-macOS.pkg)，雙擊安裝（首次請右鍵 → 開啟）。輸入法會放到你的 `~/Library/Input Methods`，毋須管理員權限。然後到系統設定 → 鍵盤 → 輸入法，加入 KINFX Input。
+下載 [`KINFX-Input-0.1.12-macOS.pkg`](https://github.com/Kinfxhk/kinfx-input/releases/download/v0.1.12/KINFX-Input-0.1.12-macOS.pkg)，雙擊安裝（首次請右鍵 → 開啟）。輸入法會放到你的 `~/Library/Input Methods`，毋須管理員權限。然後到系統設定 → 鍵盤 → 輸入法，加入 KINFX Input。
 
 新裝可能要登出再登入一次，系統才會把按鍵交給新輸入法。MacBook Neo 用同一個包。
 
 ### Windows
 
-下載 [`KINFX-Input-0.1.11-Windows-x64.exe`](https://github.com/Kinfxhk/kinfx-input/releases/download/v0.1.11/KINFX-Input-0.1.11-Windows-x64.exe)，右鍵以系統管理員執行。安裝完成後，在工作列輸入法選 KINFX Input（速）。不依賴小狼毫。
+下載 [`KINFX-Input-0.1.12-Windows-x64.exe`](https://github.com/Kinfxhk/kinfx-input/releases/download/v0.1.12/KINFX-Input-0.1.12-Windows-x64.exe)，右鍵以系統管理員執行。安裝完成後，在工作列輸入法選 KINFX Input（速）。不依賴小狼毫。
 
 ### Linux（amd64，需要 IBus）
 
 ```sh
-sudo apt install ./kinfx-input_0.1.11_amd64.deb
+sudo apt install ./kinfx-input_0.1.12_amd64.deb
 ibus restart
 ```
 
