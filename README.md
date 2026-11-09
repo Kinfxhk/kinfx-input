@@ -1,4 +1,4 @@
-# KINFX Input
+# KINFX Input － 速成混打輸入法
 
 **[☕ Buy Me a Coffee](https://buymeacoffee.com/kinfxhk)** · [GitHub Sponsors](https://github.com/sponsors/Kinfxhk)
 
