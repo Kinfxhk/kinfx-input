@@ -541,7 +541,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
 
   void ResetInput() {
     ++generation_;
-    pending_ = pendUp_ = pendEaten_ = paste_ = switch_ = hint_ = cands_ = false;
+    pending_ = pendUp_ = pendEaten_ = paste_ = switch_ = hint_ = cands_ = newline_ = newlineExt_ = endFailed_ = commitWritten_ = commitFailed_ = false;
     pendW_ = 0;
     chord_ = KxChord();
     last_ = POINT{-1, -1}; lastH_ = 0;
@@ -681,6 +681,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
       pending_ = false;
       if (same) return pendEaten_;
     }
+    newline_ = false;  // only the key that set it (test + real call of one Return) may use it
     int sym = KeySym(w, l), mask = Mask();
     // Tab is the shared "expand" key (Linux/macOS behave the same): with an open composition it
     // goes to Rime, where win_quick toggles the multi-column list and the text stays in preedit
@@ -710,6 +711,15 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
       // schema resets full_shape), must not flip it back. Apply before the key, publish after.
       if (kx::ApplyShape(sess_)) Trace("shape applied");
       eaten = kx_key(sess_, sym, m | (up ? kRelease : 0)) != 0;
+      // A Return Rime lets through while a preedit is open (deferred "hello." / "hello-") is a
+      // genuine newline (shared hello-dot-return): Rime committed the held text. Passed on with
+      // our composition still open, the app spends it ending the composition (no CR LF). Letting
+      // it through after a sync commit is not enough either: IMM32/CUAS hosts (WinForms) apply
+      // the result after the key, so the newline lands before the text (VM fd02caa). Claim it;
+      // FinishNewline re-sends one tagged Return once the commit is really in the document.
+      newline_ = sym == 0xff0d && !up && !eaten && comp_ != nullptr && GetMessageExtraInfo() != kNewlineTag;
+      if (newline_) { eaten = true; endFailed_ = commitWritten_ = commitFailed_ = false; }
+      newlineExt_ = newline_ && ((l >> 24) & 1);
       // key_bindings: Shift+space toggles full_shape (the Ctrl chords never reach Rime here).
       if (kx::NoteShape(sess_, sym == 0x20 && (m & kShift) && !up)) Trace("shape held");
       Trace("key sym=" + std::to_string(sym) + " m=" + std::to_string(m) + (up ? " up" : "") + " eaten=" + (eaten ? "1" : "0"));
@@ -796,6 +806,42 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     Trace("hint [" + kx::Utf8(s) + "]");
   }
 
+  // The claimed Return (see Process), after Handle's Update. Only a commit that is really in the
+  // document (sync lock granted, the commit's SetText accepted, EndComposition succeeded, our
+  // composition closed) gets the newline:
+  // one Return is re-sent, tagged so it can never be claimed again, queued behind the app's own
+  // handling of the commit. Otherwise (lock refused -> commit only queued async, or the end was
+  // refused) the Return stays swallowed: text kept, that newline lost, never newline-before-text.
+  // A failed SendInput is traced; the newline is then lost too (the text is not).
+  bool FinishNewline() {
+    if (!newline_) return false;
+    newline_ = false;
+    if (comp_ || endFailed_ || commitFailed_ || !commitWritten_) {
+      Trace("newline: commit not confirmed, Return swallowed");
+      return true;
+    }
+    // The user's Return is normally still down here. A re-sent key-down on a held key carries the
+    // previous-state bit (lParam bit 30), and Chromium/Electron drop such a '\r' until the field has
+    // seen a fresh Return (crbug.com/319100: accept_carriage_return_), so the first newline in every
+    // field was lost (E40 host f19f39f). Release it first so the re-sent Return is a fresh press.
+    INPUT in[3] = {};
+    const DWORD ext = newlineExt_ ? KEYEVENTF_EXTENDEDKEY : 0;  // keypad Enter stays keypad Enter
+    for (int i = 0; i < 3; i++) {
+      in[i].type = INPUT_KEYBOARD; in[i].ki.wVk = VK_RETURN;
+      in[i].ki.dwFlags = ext | (i != 1 ? KEYEVENTF_KEYUP : 0); in[i].ki.dwExtraInfo = (ULONG_PTR)kNewlineTag;
+    }
+    const UINT lead = (GetAsyncKeyState(VK_RETURN) & 0x8000) ? 1 : 0;  // release only a held Return
+    const UINT want = 2 + lead;  // [up] down up
+    const UINT sent = SendInput(want, &in[1 - lead], sizeof(INPUT));
+    if (sent == want) Trace(lead ? "newline: committed, held Return released, re-sent" : "newline: committed, Return re-sent");
+    else if (sent == want - 1) {
+      // Only the key-down went in (the newline is delivered); never leave Return logically held.
+      const UINT up = SendInput(1, &in[2], sizeof(INPUT));
+      Trace(up == 1 ? "newline: re-sent, key-up retried" : "newline: re-sent, key-up lost");
+    } else Trace("newline: SendInput failed, newline lost");
+    return true;
+  }
+
   bool Handle(ITfContext *c, WPARAM w, LPARAM l, bool up) {
     EnsureContext(c);
     bool eaten = Process(w, l, up);
@@ -804,6 +850,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     // closes the association list (Rime state changed) and must still reach the app.
     Update(c);
     if (hint_) { hint_ = false; ShowHint(); }
+    if (!up && FinishNewline()) return true;
     if (paste_ && !up) {
       // TSF already ate this Ctrl+V (OnTestKeyDown); the held text is written, composition closed,
       // so a re-sent V reaches the app as a plain paste (paste_ needs comp_, now null).
@@ -915,16 +962,21 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     if (!commit.empty()) {
       if (!comp_) Begin(ec, c);
       if (generation != generation_ || !Same(c, owner_)) return;
+      if (!comp_) commitFailed_ = true;
       if (comp_) {
         comp_->AddRef();
         auto composition = Adopt(comp_);
         ITfRange *r = nullptr;
         if (SUCCEEDED(composition->GetRange(&r)) && r) {
-          r->SetText(ec, 0, commit.c_str(), (LONG)commit.size());
+          // Only a commit the document really accepted may release a claimed Return (FinishNewline).
+          if (SUCCEEDED(r->SetText(ec, 0, commit.c_str(), (LONG)commit.size()))) commitWritten_ = true;
+          else commitFailed_ = true;
           if (generation != generation_ || !Same(composition.get(), comp_)) { r->Release(); return; }
           r->Collapse(ec, TF_ANCHOR_END);
           SetSel(ec, c, r);
           r->Release();
+        } else {
+          commitFailed_ = true;
         }
         if (generation != generation_ || !Same(composition.get(), comp_)) return;
         End(ec);
@@ -1047,7 +1099,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     auto context = Adopt(owner_);
     comp_ = nullptr; owner_ = nullptr;
     shownPre_.clear();
-    if (composition) composition->EndComposition(ec);
+    if (composition && FAILED(composition->EndComposition(ec))) endFailed_ = true;
   }
 
   static void SetSel(TfEditCookie ec, ITfContext *c, ITfRange *r) {
@@ -1080,6 +1132,10 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   bool hint_ = false;  // a mode switch is waiting to be shown after the next Update
   bool switch_ = false;  // a mode switch happened in the test path: Tail() commits it
   bool pending_ = false, pendUp_ = false, pendEaten_ = false, paste_ = false;
+  bool newline_ = false, newlineExt_ = false;  // claimed Return: FinishNewline re-sends it after the commit
+  bool endFailed_ = false;  // the host refused EndComposition since the claim
+  bool commitWritten_ = false, commitFailed_ = false;  // commit SetText accepted / refused since the claim
+  static constexpr LPARAM kNewlineTag = 0x4B584E4C;  // 'KXNL' in dwExtraInfo: our own re-sent Return
   bool cands_ = false;  // candidates (incl. the association list) were showing on the last update
   WPARAM pendW_ = 0;
 };

@@ -42,8 +42,9 @@ class CandidatePlacement(unittest.TestCase):
         # is clamped into the work area.
         self.assertIn('const int belowSpace = area.bottom - (caret.bottom + gap);', HDR)
         self.assertIn('const int aboveSpace = (caret.top - gap) - area.top;', HDR)
-        # 7 original sides plus 3 sticky early returns (below/above/right), each still FitInside.
-        self.assertEqual(HDR.count('return FitInside('), 10)
+        # 7 original sides + 2 P3 no-room sides (right/left, d5e1863) + 3 sticky early returns
+        # (below/above/right, cand-stable); each still FitInside.
+        self.assertEqual(HDR.count('return FitInside('), 12)
         self.assertNotIn('return below;', HDR)
         self.assertNotIn('return above;', HDR)
 
