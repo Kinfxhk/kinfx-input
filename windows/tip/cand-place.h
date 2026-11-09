@@ -33,13 +33,19 @@ inline Rect FitInside(Rect r, const Rect &area) {
 // fits, the other side when that fits, otherwise the larger side shrunk to the space it has, and
 // only when neither side has room at all to the right of the caret.
 // *how receives 0=below, 1=above, 2=right for the caller's trace.
-inline Rect PlaceCandidate(Rect caret, int w, int h, const Rect &area, int gap, bool preferAbove, int *how) {
+// stickySide: last committed side while the panel stayed visible on this caret line (-1 = none).
+// Hysteresis only: if that side was below/above and the natural panel still fits there fully, keep
+// it. A side that no longer fits falls through to the usual preferAbove order.
+inline Rect PlaceCandidate(Rect caret, int w, int h, const Rect &area, int gap, bool preferAbove, int *how,
+                           int stickySide = -1) {
   const int belowSpace = area.bottom - (caret.bottom + gap);
   const int aboveSpace = (caret.top - gap) - area.top;
   Rect below{caret.left, caret.bottom + gap, caret.left + w, caret.bottom + gap + h};
   Rect above{caret.left, caret.top - gap - h, caret.left + w, caret.top - gap};
   const bool belowFits = h <= belowSpace;
   const bool aboveFits = h <= aboveSpace;
+  if (stickySide == 0 && belowFits) { if (how) *how = 0; return FitInside(below, area); }
+  if (stickySide == 1 && aboveFits) { if (how) *how = 1; return FitInside(above, area); }
   Rect right{caret.right + gap, caret.top, caret.right + gap + w, caret.top + h};
   const bool rightFits = right.right <= area.right && right.bottom <= area.bottom;
   if (aboveFits && preferAbove) { if (how) *how = 1; return FitInside(above, area); }
@@ -115,18 +121,23 @@ inline std::vector<Rect> LayoutCells(const std::vector<int> &widths, int lineH, 
 //    clickable. Keyboard selection still reaches it.
 // inset: window border per side (client = window minus 2*inset). Returns the window rect;
 // *cells: one cell per item in client coordinates (empty Rect = hidden); *visible: shown count.
+// pageSize: configured page capacity (9 or 5), not the current item count. A vertical page of 5 or
+// more prefers above so a tall list below does not cover the next Qt/Electron field (x46). A page
+// that cannot be parsed falls back to 9. stickySide: last side (0 below / 1 above) while the panel
+// stayed visible on this same caret line; -1 when there is nothing to stick to.
 struct CandGeom { int lineH, padX, padY, gapX, gap, inset; };
 inline bool IsEmpty(const Rect &r) { return r.right <= r.left || r.bottom <= r.top; }
 inline Rect FitCandidates(const std::vector<int> &widths, bool vertical, Rect caret, const Rect &area,
-                          const CandGeom &g, std::vector<Rect> *cells, int *visible, int *how, bool *vertOut) {
+                          const CandGeom &g, std::vector<Rect> *cells, int *visible, int *how, bool *vertOut,
+                          int pageSize = 9, int stickySide = -1) {
   const int n = (int)widths.size();
-  const bool preferAbove = vertical && n >= 5;
+  const bool preferAbove = vertical && pageSize >= 5;
   const int big = 1 << 30;
   int W = 0, H = 0;
   bool vert = vertical;
   *cells = LayoutCells(widths, g.lineH, vert, big, big, g.padX, g.padY, g.gapX, &W, &H);
   const int e = 2 * g.inset;  // LayoutCells sizes the client; the window adds the border
-  Rect placed = PlaceCandidate(caret, W + e, H + e, area, g.gap, preferAbove, how);
+  Rect placed = PlaceCandidate(caret, W + e, H + e, area, g.gap, preferAbove, how, stickySide);
   // A vertical list that fits neither above nor below is re-flowed too (rows first: the familiar
   // single-row fallback), even when PlaceCandidate could hang it beside the caret.
   const bool tallMisfit = vertical && n > 1 && caret.top - g.gap - (H + e) < area.top &&
@@ -152,7 +163,7 @@ inline Rect FitCandidates(const std::vector<int> &widths, bool vertical, Rect ca
       *cells = LayoutCells(widths, g.lineH, true, big, aboveRoom > belowRoom ? aboveRoom : belowRoom,
                            g.padX, g.padY, g.gapX, &W, &H);
     }
-    placed = PlaceCandidate(caret, W + e, H + e, area, g.gap, vert && n >= 5, how);
+    placed = PlaceCandidate(caret, W + e, H + e, area, g.gap, preferAbove, how, stickySide);
   }
   const int cw = placed.Width() - e, ch = placed.Height() - e;
   int shown = 0;

@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <msctf.h>
 #include <olectl.h>
+#include <cstdlib>
 #include <functional>
 #include <memory>
 #include <string>
@@ -105,7 +106,7 @@ static int KeySym(WPARAM vk, LPARAM lp) {
 // ---------- candidate window ----------
 class CandWin {
  public:
-  void Show(const std::vector<std::wstring> &items, POINT at, int lineAbove, bool vertical,
+  void Show(const std::vector<std::wstring> &items, POINT at, int lineAbove, bool vertical, int pageSize,
             std::function<void(int)> pick = {}) {
     pick_ = std::move(pick); pressed_ = -1;
     if (!hwnd_) Create();
@@ -150,17 +151,23 @@ class CandWin {
       // A tall vertical list below the caret reaches the next input of Qt/Electron forms, whose
       // fields are not separate windows: a click meant for that field picks a candidate instead
       // (x46: "vd" + click lower field -> upper field "妹好", lower field never focused). Tall
-      // lists go above the text line when they fit; short ones stay below. A list that fits
-      // neither way becomes one row, and it never covers the line being typed.
+      // lists go above the text line when the configured page holds 5 or more (x46), not when the
+      // current page happens to; short pages stay below. A list that fits neither way becomes one
+      // row, and it never covers the line being typed. While the panel stays visible on the same
+      // caret line, the last side is kept if that side still fits (count changes must not flip it).
       const kx::Rect area{wa.left, wa.top, wa.right, wa.bottom};
       const kx::Rect caretLine{at.x, at.y - 2 - lineAbove, at.x + 8, at.y - 2};
+      const bool sameLine = stickyHow_ == 0 || stickyHow_ == 1;
+      const bool stick = hwnd_ && IsWindowVisible(hwnd_) && sameLine &&
+                         abs(caretLine.top - stickyTop_) <= 2 && abs(caretLine.bottom - stickyBottom_) <= 2;
       // A list that fits neither above nor below is re-flowed (one row first, then wrapped rows or
       // columns) inside the real room on one side of the caret; see kx::FitCandidates.
       POINT at2 = at;
       int how = -1, shown = 0;
       bool vert = vertical_;
       const int natW = ww, natH = wh;
-      kx::Rect placed = kx::FitCandidates(widths, vertical_, caretLine, area, geom, &cells_, &shown, &how, &vert);
+      kx::Rect placed = kx::FitCandidates(widths, vertical_, caretLine, area, geom, &cells_, &shown, &how, &vert,
+                                         pageSize, stick ? stickyHow_ : -1);
       vertical_ = vert;
       if (placed.Width() != natW || placed.Height() != natH || shown != (int)items_.size())
         Trace("cand relayout " + std::to_string(natW) + "x" + std::to_string(natH) + " -> " +
@@ -175,6 +182,13 @@ class CandWin {
       wh = placed.Height();
       Trace("cand place=" + std::to_string(how) + " at=" + std::to_string(at.x) + "," + std::to_string(at.y) +
             " wh=" + std::to_string(ww) + "x" + std::to_string(wh));
+      if (how == 0 || how == 1) {
+        stickyHow_ = how;
+        stickyTop_ = caretLine.top;
+        stickyBottom_ = caretLine.bottom;
+      } else {
+        stickyHow_ = -1;
+      }
     }
     SetWindowPos(hwnd_, HWND_TOPMOST, at.x, at.y, ww, wh, SWP_NOACTIVATE | SWP_SHOWWINDOW);
     // Some hosts (WebView2 panels such as Raycast's search, browser popups) hide their window
@@ -191,13 +205,14 @@ class CandWin {
     pick_ = {}; pressed_ = -1;
     if (force) { hintOn_ = false; KillTimer(hwnd_, 1); items_.clear(); }
     KillTimer(hwnd_, 2);
+    stickyHow_ = -1;
     ShowWindow(hwnd_, SW_HIDE);
   }
   // Mode hint ("中"/"英"): the candidate window for 400 ms, so the switch is visible without
   // a second window class and without touching the keyboard. The modifier-up that follows the
   // switch runs Update() -> Hide(), so the window is held until the timer fires.
   void Hint(const std::wstring &s, POINT at) {
-    Show({s}, at, 20, true);
+    Show({s}, at, 20, true, 1);
     hintOn_ = true;
     if (hwnd_) SetTimer(hwnd_, 1, 400, nullptr);
   }
@@ -310,6 +325,8 @@ class CandWin {
   HWND fgRoot_ = nullptr;  // foreground root the list was shown for (timer 2 hides when it changes)
   int lineH_ = 24;
   int dpi_ = 0;
+  int stickyHow_ = -1;  // last side (0 below / 1 above) while the panel stayed visible; cleared in Hide()
+  int stickyTop_ = 0, stickyBottom_ = 0;  // caret line that side was chosen for
   static const int kFontPx = 24;  // px at 96 DPI (0.1.3: a fixed 18 px, never DPI-scaled)
   int S(int px) const { return MulDiv(px, dpi_ ? dpi_ : 96, 96); }
 };
@@ -873,7 +890,9 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     auto it = kx::Current().find("candidate_layout");
     c->AddRef(); auto context = Adopt(c);
     HWND hwnd = GetFocus();
-    cand_.Show(cands, at, lineH, it == kx::Current().end() || it->second != "horizontal",
+    int pageSize = 9;
+    if (f.size() > 2) { char *end = nullptr; long v = strtol(f[2].c_str(), &end, 10); if (end != f[2].c_str() && v > 0) pageSize = (int)v; }
+    cand_.Show(cands, at, lineH, it == kx::Current().end() || it->second != "horizontal", pageSize,
                [this, context, generation, hwnd, ctx](int item) { PickCandidate(context.get(), generation, hwnd, ctx, item); });
   }
 
