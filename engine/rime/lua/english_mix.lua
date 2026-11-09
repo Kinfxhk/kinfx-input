@@ -49,10 +49,14 @@ end
 
 local function commit_text(env, text, ascii)
   local ctx = env.engine.context
-  -- ASCII letters only: %a is LC_CTYPE-sensitive in some Lua builds; a CJK
-  -- commit must never look "wide-bypassable" because a non-C locale told %a a
-  -- high byte is alphabetic. [A-Za-z] is locale-independent.
-  local wide = full_shape(env) and (ascii or (text and text:find("[A-Za-z]")))
+  -- ASCII letters and the space only: %a is LC_CTYPE-sensitive in some Lua
+  -- builds; a CJK commit must never look "wide-bypassable" because a non-C
+  -- locale told %a a high byte is alphabetic. [A-Za-z ] is locale-independent.
+  -- The space is a member because Space is ALWAYS U+0020 in every mode: a
+  -- select-and-space commit (abcd -> 明銖 + " ") carries no letter, so without
+  -- the space in this class the global ShapeFormatter turns its trailing space
+  -- into U+3000 under full_shape.
+  local wide = full_shape(env) and (ascii or (text and text:find("[A-Za-z ]")))
   -- Internal formatter bypass is not a user navigation transaction (a native
   -- commit notifier can call this while its old association is still visible).
   local internal = env.width_internal

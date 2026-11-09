@@ -65,6 +65,32 @@ for name, keys, want in [
 ]:
     check(name, type_keys(keys)[0], want)
 
+# Full_shape + select-and-space: Space is ALWAYS U+0020 in every mode, width
+# only affects punctuation. `abcd` splits to Sucheng pairs (明銖) and Space
+# commits 明銖 + " " in ONE commit; under full_shape the global ShapeFormatter
+# used to map that trailing space to U+3000 because the commit text carried no
+# ASCII letter to trigger the bypass. `vd`+Space must still page, and a real
+# English word keeps its half-width space.
+def type_fullshape(keys):
+    s = E.session()
+    out = ""
+    E.key(s, 0x20, 1)             # Shift+Space press  -> full_shape on
+    E.key(s, 0x20, (1 << 30) | 1)  # Shift+Space release
+    E.commit(s)
+    for k in keys:
+        E.key(s, k, 0)
+        out += E.commit(s) or ""
+    E.key(s, 0x20, 1)             # Shift+Space press  -> full_shape off
+    E.key(s, 0x20, (1 << 30) | 1)
+    E.commit(s)
+    E.destroy(s)
+    return out
+
+
+check("full_shape abcd space half-width", type_fullshape(codes("abcd") + [0x20]), "明銖\u0020")
+check("full_shape vd space still pages", type_fullshape(codes("vd") + [0x20]), "")
+check("full_shape hello space half-width", type_fullshape(codes("hello") + [0x20]), "hello\u0020")
+
 # F35 is the engine blur protocol, not the IBus focus callback. The shared
 # default keeps short letters; explicit commit mode keeps Windows-style candidates.
 short_commit = E.settings.get("short_blur") == "commit"
