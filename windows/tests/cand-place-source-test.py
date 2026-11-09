@@ -15,7 +15,8 @@ class CandidatePlacement(unittest.TestCase):
         self.assertIn('kx::FitCandidates(widths, vertical_, caretLine, area, geom, &cells_,', SRC)
         self.assertIn('pageSize, stick ? stickyHow_ : -1)', SRC)
         self.assertIn('const bool preferAbove = vertical && pageSize >= 5;', HDR)
-        self.assertIn('PlaceCandidate(caret, W + e, H + e, area, g.gap, preferAbove, how, stickySide)', HDR)
+        self.assertIn('PlaceCandidate(caret, W + e, refH, area, g.gap, preferAbove, &refHow)', HDR)
+        self.assertIn('PlaceCandidate(caret, W + e, H + e, area, g.gap, preferAbove, how, side)', HDR)
         self.assertIn('Show({s}, at, 20, true, 1)', SRC)
         self.assertIn('cand_.Show(cands, at, lineH, it == kx::Current().end() || it->second != "horizontal", pageSize,', SRC)
         self.assertIn('if (end != f[2].c_str() && v > 0) pageSize = (int)v;', SRC)
@@ -41,8 +42,8 @@ class CandidatePlacement(unittest.TestCase):
         # is clamped into the work area.
         self.assertIn('const int belowSpace = area.bottom - (caret.bottom + gap);', HDR)
         self.assertIn('const int aboveSpace = (caret.top - gap) - area.top;', HDR)
-        # 7 original sides plus 2 sticky early returns (below/above), each still FitInside.
-        self.assertEqual(HDR.count('return FitInside('), 9)
+        # 7 original sides plus 3 sticky early returns (below/above/right), each still FitInside.
+        self.assertEqual(HDR.count('return FitInside('), 10)
         self.assertNotIn('return below;', HDR)
         self.assertNotIn('return above;', HDR)
 

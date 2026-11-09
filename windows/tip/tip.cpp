@@ -157,7 +157,7 @@ class CandWin {
       // caret line, the last side is kept if that side still fits (count changes must not flip it).
       const kx::Rect area{wa.left, wa.top, wa.right, wa.bottom};
       const kx::Rect caretLine{at.x, at.y - 2 - lineAbove, at.x + 8, at.y - 2};
-      const bool sameLine = stickyHow_ == 0 || stickyHow_ == 1;
+      const bool sameLine = stickyHow_ == 0 || stickyHow_ == 1 || stickyHow_ == 2;
       const bool stick = hwnd_ && IsWindowVisible(hwnd_) && sameLine &&
                          abs(caretLine.top - stickyTop_) <= 2 && abs(caretLine.bottom - stickyBottom_) <= 2;
       // A list that fits neither above nor below is re-flowed (one row first, then wrapped rows or
@@ -182,7 +182,7 @@ class CandWin {
       wh = placed.Height();
       Trace("cand place=" + std::to_string(how) + " at=" + std::to_string(at.x) + "," + std::to_string(at.y) +
             " wh=" + std::to_string(ww) + "x" + std::to_string(wh));
-      if (how == 0 || how == 1) {
+      if (how == 0 || how == 1 || how == 2) {
         stickyHow_ = how;
         stickyTop_ = caretLine.top;
         stickyBottom_ = caretLine.bottom;
@@ -325,7 +325,7 @@ class CandWin {
   HWND fgRoot_ = nullptr;  // foreground root the list was shown for (timer 2 hides when it changes)
   int lineH_ = 24;
   int dpi_ = 0;
-  int stickyHow_ = -1;  // last side (0 below / 1 above) while the panel stayed visible; cleared in Hide()
+  int stickyHow_ = -1;  // last side (0 below / 1 above / 2 right) while the panel stayed visible; cleared in Hide()
   int stickyTop_ = 0, stickyBottom_ = 0;  // caret line that side was chosen for
   static const int kFontPx = 24;  // px at 96 DPI (0.1.3: a fixed 18 px, never DPI-scaled)
   int S(int px) const { return MulDiv(px, dpi_ ? dpi_ : 96, 96); }

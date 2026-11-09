@@ -190,13 +190,44 @@ int main() {
     int howMoved = -1;
     Rect moved = FitCandidates(std::vector<int>(9, 60), true, lowLine, area, g, &c, &shown, &howMoved, &vert, 9, 0);
     Check("sticky below: moves when it no longer fits", howMoved != 0 && moved.bottom <= lowLine.top);
-    // Different caret line: the caller must not pass the old side. Passing it would keep below;
-    // dropping it (stickySide -1, what Show does when top/bottom differ) follows the page side.
+    // Different caret line: the caller must not pass the old side. Passing sticky 0 keeps below;
+    // dropping it (stickySide -1, what Show does when top/bottom differ) follows the full-page side.
+    // Expectation changed with this design: a 1-item list at y=200 used to fit above (howOther == 1),
+    // but a full page of 9 is 284 px and only 198 px is free above, so the page side is right.
     int howStuck = -1, howOther = -1;
     const Rect other{100, 200, 108, 230};
     FitCandidates(std::vector<int>(1, 60), true, other, area, g, &c, &shown, &howStuck, &vert, 9, 0);
     FitCandidates(std::vector<int>(1, 60), true, other, area, g, &c, &shown, &howOther, &vert, 9, -1);
-    Check("different caret line: sticky ignored", howStuck == 0 && howOther == 1 && howOther != howStuck);
+    Check("different caret line: sticky ignored", howStuck == 0 && howOther == 2 && howOther != howStuck);
+    // Side follows a FULL page, not the current item count. VM (DLL 630966d): caret line ~y 62..92
+    // in a work area whose top is 0, so ~60 px above. n=1 (52 px) fitted above; n=9 (356 px) did
+    // not, so preferAbove sent it right. A full page of 9 does not fit above either, so n=1/9/3
+    // must share that side (right), not flip above <-> right as the list grows and shrinks.
+    const Rect topLine{91, 62, 99, 92};
+    const Rect topArea{0, 0, 1024, 728};
+    const CandGeom gt{38, 14, 6, 20, 2, 1};
+    int howT1 = -1, howT9 = -1, howT3 = -1;
+    FitCandidates(std::vector<int>(1, 40), true, topLine, topArea, gt, &c, &shown, &howT1, &vert, 9);
+    FitCandidates(std::vector<int>(9, 40), true, topLine, topArea, gt, &c, &shown, &howT9, &vert, 9);
+    FitCandidates(std::vector<int>(3, 40), true, topLine, topArea, gt, &c, &shown, &howT3, &vert, 9);
+    Check("fit top edge, pageSize 9: n=1/9/3 same side", howT1 == howT9 && howT9 == howT3 && howT1 != -1);
+    // Bottom edge: only room above. A short list used to drop below; a full page cannot, so both stay above.
+    const Rect botLine{100, 980, 108, 1010};
+    int howB1 = -1, howB9 = -1;
+    FitCandidates(std::vector<int>(1, 60), true, botLine, area, g, &c, &shown, &howB1, &vert, 9);
+    FitCandidates(std::vector<int>(9, 60), true, botLine, area, g, &c, &shown, &howB9, &vert, 9);
+    Check("fit bottom edge, pageSize 9: n=1/9 same side", howB1 == howB9 && howB1 == 1);
+    // Short page (5) with room both ways: n=1 and n=5 share the side a full page of 5 would take.
+    int howP1 = -1, howP5 = -1;
+    FitCandidates(std::vector<int>(1, 60), true, both, area, g, &c, &shown, &howP1, &vert, 5);
+    FitCandidates(std::vector<int>(5, 60), true, both, area, g, &c, &shown, &howP5, &vert, 5);
+    Check("fit pageSize 5, room both ways: n=1 and n=5 same side", howP1 == howP5 && howP1 != -1);
+    // stickySide 2: visible on the right, same caret, list grows but the right still holds it.
+    // Mid-screen (room above): without sticky 2 a page of 9 goes above, so this must stay right
+    // only because stickySide 2 is honoured.
+    int howR = -1;
+    Rect stayed = FitCandidates(std::vector<int>(3, 60), true, both, area, g, &c, &shown, &howR, &vert, 9, 2);
+    Check("sticky right: stays right while it fits", howR == 2 && stayed.left >= both.right);
   }
   std::printf("%d FAIL\n", fails);
   return fails ? 1 : 0;
