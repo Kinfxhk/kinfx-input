@@ -234,6 +234,22 @@ check("comma hello half-width", typeSeq(letters("hello") + [(0x2c, 0)]), "hello,
 // Shift+Space toggles punctuation full-width; space stays half-width.
 check("toggle full comma full-width", typeSeq(shiftSpace + letters("vd1") + [(0x2c, 0)]), "好\u{ff0c}")
 check("toggle full space still half-width", typeSeq(shiftSpace + letters("vd1") + [(0xff1b, 0), (0x20, 0)]), "好\u{0020}")
+// full_shape + select-and-space: `abcd` splits to Sucheng pairs (明銖) and
+// Space commits 明銖 + " " in ONE commit. That trailing space must stay U+0020
+// under full_shape — Space is always half-width, width only affects punctuation.
+// Ensure full_shape for these three, then net back to half so the width checks
+// below still start from the default half-width.
+do {
+  let s0 = engine.newSession()
+  if engine.globalFullShape == 0 { for (k, m) in shiftSpace { _ = engine.key(s0, k, m) }; _ = engine.takeCommit(s0) }
+  engine.destroy(s0)
+  check("toggle full abcd space half-width", typeSeq(letters("abcd") + [(0x20, 0)]), "明銖\u{0020}")
+  check("toggle full vd space still pages", typeSeq(letters("vd") + [(0x20, 0)]), "")
+  check("toggle full hello space half-width", typeSeq(letters("hello") + [(0x20, 0)]), "hello\u{0020}")
+  let s1 = engine.newSession()
+  if engine.globalFullShape == 1 { for (k, m) in shiftSpace { _ = engine.key(s1, k, m) }; _ = engine.takeCommit(s1) }
+  engine.destroy(s1)
+}
 
 // full_shape global persistence: bidirectional broadcast to an already-typed
 // existing owner, new-owner restore (destroy A / open B), and shortcut no-persist.
