@@ -1,6 +1,6 @@
 {
   "name": "KINFX Input",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "about": "KINFX Input 是獨立的速成中英混打輸入法。引擎為 librime 與 KINFX 速成詞庫，已封入程式內，毋須另裝小狼毫、鼠鬚管或 Fcitx 方案。",
   "help": [
     "啟用：在系統的輸入法選單選「KINFX Input」。",
@@ -13,7 +13,10 @@
   ],
   "donate_url": "https://buymeacoffee.com/kinfxhk",
   "donate_links": [
-    {"label": "Buy Me a Coffee", "url": "https://buymeacoffee.com/kinfxhk"}
+    {
+      "label": "Buy Me a Coffee",
+      "url": "https://buymeacoffee.com/kinfxhk"
+    }
   ],
   "license": "MIT（引擎 librime 為 BSD-3-Clause）"
 }
