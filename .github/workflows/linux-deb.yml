@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: build deps (librime 1.16 from noble+1, matching the .deb dep)
         run: |
-          apt-get install -y librime-dev librime-bin librime-plugin-lua gcc python3 fakeroot dpkg-dev
+          apt-get install -y librime-dev librime-bin librime-plugin-lua gcc libc6-dev python3 fakeroot dpkg-dev
       - name: build (as non-root, so file-permission fail-closed tests behave like a real user)
         run: |
           useradd -m builder
