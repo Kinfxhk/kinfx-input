@@ -33,15 +33,22 @@ inline Rect FitInside(Rect r, const Rect &area) {
 // fits, the other side when that fits, otherwise the larger side shrunk to the space it has, and
 // only when neither side has room at all to the right of the caret.
 // *how receives 0=below, 1=above, 2=right for the caller's trace.
-inline Rect PlaceCandidate(Rect caret, int w, int h, const Rect &area, int gap, bool preferAbove, int *how) {
+// stickySide: last committed side while the panel stayed visible on this caret line (-1 = none).
+// Hysteresis only: if that side was below/above/right and the natural panel still fits there fully,
+// keep it. A side that no longer fits falls through to the usual preferAbove order.
+inline Rect PlaceCandidate(Rect caret, int w, int h, const Rect &area, int gap, bool preferAbove, int *how,
+                           int stickySide = -1) {
   const int belowSpace = area.bottom - (caret.bottom + gap);
   const int aboveSpace = (caret.top - gap) - area.top;
   Rect below{caret.left, caret.bottom + gap, caret.left + w, caret.bottom + gap + h};
   Rect above{caret.left, caret.top - gap - h, caret.left + w, caret.top - gap};
   const bool belowFits = h <= belowSpace;
   const bool aboveFits = h <= aboveSpace;
+  if (stickySide == 0 && belowFits) { if (how) *how = 0; return FitInside(below, area); }
+  if (stickySide == 1 && aboveFits) { if (how) *how = 1; return FitInside(above, area); }
   Rect right{caret.right + gap, caret.top, caret.right + gap + w, caret.top + h};
   const bool rightFits = right.right <= area.right && right.bottom <= area.bottom;
+  if (stickySide == 2 && rightFits) { if (how) *how = 2; return FitInside(right, area); }
   if (aboveFits && preferAbove) { if (how) *how = 1; return FitInside(above, area); }
   // A tall list that cannot go above must not hang over the rows below the caret either: the
   // next input of a Qt/Electron form lives there. Put it beside the caret instead.
@@ -55,6 +62,21 @@ inline Rect PlaceCandidate(Rect caret, int w, int h, const Rect &area, int gap, 
   if (belowSpace > 0) {
     if (how) *how = 0;
     return FitInside(Rect{caret.left, caret.bottom + gap, caret.left + w, area.bottom}, area);
+  }
+  // No room above or below: beside the caret on the side with more room, never wider than that
+  // room, so clamping cannot slide it back over the caret (Mac review 2026-11-07 P3). Only a
+  // caret with no room on any side falls back to a plain clamp.
+  const int rightSpace = area.right - (caret.right + gap);
+  const int leftSpace = (caret.left - gap) - area.left;
+  if (rightSpace >= leftSpace && rightSpace > 0) {
+    if (how) *how = 2;
+    const int rw = w < rightSpace ? w : rightSpace;
+    return FitInside(Rect{caret.right + gap, caret.top, caret.right + gap + rw, caret.top + h}, area);
+  }
+  if (leftSpace > 0) {
+    if (how) *how = 3;
+    const int lw = w < leftSpace ? w : leftSpace;
+    return FitInside(Rect{caret.left - gap - lw, caret.top, caret.left - gap, caret.top + h}, area);
   }
   if (how) *how = 2;
   return FitInside(right, area);
@@ -115,18 +137,37 @@ inline std::vector<Rect> LayoutCells(const std::vector<int> &widths, int lineH, 
 //    clickable. Keyboard selection still reaches it.
 // inset: window border per side (client = window minus 2*inset). Returns the window rect;
 // *cells: one cell per item in client coordinates (empty Rect = hidden); *visible: shown count.
+// pageSize: configured page capacity (9 or 5), not the current item count. A vertical page of 5 or
+// more prefers above so a tall list below does not cover the next Qt/Electron field (x46). A page
+// that cannot be parsed falls back to 9. stickySide: last side (0 below / 1 above / 2 right) while
+// the panel stayed visible on this same caret line; -1 when there is nothing to stick to.
+// The side itself is chosen for a FULL page (pageSize rows), not the current list: a one-item list
+// and a full page must not flip above <-> right just because only the short one fits above. The
+// actual panel is then placed on that side via stickySide, and falls through to today's order when
+// it does not fit there.
 struct CandGeom { int lineH, padX, padY, gapX, gap, inset; };
 inline bool IsEmpty(const Rect &r) { return r.right <= r.left || r.bottom <= r.top; }
 inline Rect FitCandidates(const std::vector<int> &widths, bool vertical, Rect caret, const Rect &area,
-                          const CandGeom &g, std::vector<Rect> *cells, int *visible, int *how, bool *vertOut) {
+                          const CandGeom &g, std::vector<Rect> *cells, int *visible, int *how, bool *vertOut,
+                          int pageSize = 9, int stickySide = -1) {
   const int n = (int)widths.size();
-  const bool preferAbove = vertical && n >= 5;
+  const bool preferAbove = vertical && pageSize >= 5;
   const int big = 1 << 30;
   int W = 0, H = 0;
   bool vert = vertical;
   *cells = LayoutCells(widths, g.lineH, vert, big, big, g.padX, g.padY, g.gapX, &W, &H);
   const int e = 2 * g.inset;  // LayoutCells sizes the client; the window adds the border
-  Rect placed = PlaceCandidate(caret, W + e, H + e, area, g.gap, preferAbove, how);
+  // Side follows a full page, not the current item count. Horizontal stays one row, so its
+  // reference height is the natural height and behaviour is unchanged.
+  int refH = H + e;
+  if (vertical) {
+    const int page = pageSize < 1 ? 1 : pageSize;
+    refH = 2 * g.padY + page * g.lineH + e;
+  }
+  int refHow = -1;
+  PlaceCandidate(caret, W + e, refH, area, g.gap, preferAbove, &refHow);
+  const int side = (stickySide == 0 || stickySide == 1 || stickySide == 2) ? stickySide : refHow;
+  Rect placed = PlaceCandidate(caret, W + e, H + e, area, g.gap, preferAbove, how, side);
   // A vertical list that fits neither above nor below is re-flowed too (rows first: the familiar
   // single-row fallback), even when PlaceCandidate could hang it beside the caret.
   const bool tallMisfit = vertical && n > 1 && caret.top - g.gap - (H + e) < area.top &&
@@ -152,7 +193,7 @@ inline Rect FitCandidates(const std::vector<int> &widths, bool vertical, Rect ca
       *cells = LayoutCells(widths, g.lineH, true, big, aboveRoom > belowRoom ? aboveRoom : belowRoom,
                            g.padX, g.padY, g.gapX, &W, &H);
     }
-    placed = PlaceCandidate(caret, W + e, H + e, area, g.gap, vert && n >= 5, how);
+    placed = PlaceCandidate(caret, W + e, H + e, area, g.gap, preferAbove, how, side);
   }
   const int cw = placed.Width() - e, ch = placed.Height() - e;
   int shown = 0;

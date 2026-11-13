@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <msctf.h>
 #include <olectl.h>
+#include <cstdlib>
 #include <functional>
 #include <memory>
 #include <string>
@@ -105,7 +106,7 @@ static int KeySym(WPARAM vk, LPARAM lp) {
 // ---------- candidate window ----------
 class CandWin {
  public:
-  void Show(const std::vector<std::wstring> &items, POINT at, int lineAbove, bool vertical,
+  void Show(const std::vector<std::wstring> &items, POINT at, int lineAbove, bool vertical, int pageSize,
             std::function<void(int)> pick = {}) {
     pick_ = std::move(pick); pressed_ = -1;
     if (!hwnd_) Create();
@@ -150,17 +151,23 @@ class CandWin {
       // A tall vertical list below the caret reaches the next input of Qt/Electron forms, whose
       // fields are not separate windows: a click meant for that field picks a candidate instead
       // (x46: "vd" + click lower field -> upper field "妹好", lower field never focused). Tall
-      // lists go above the text line when they fit; short ones stay below. A list that fits
-      // neither way becomes one row, and it never covers the line being typed.
+      // lists go above the text line when the configured page holds 5 or more (x46), not when the
+      // current page happens to; short pages stay below. A list that fits neither way becomes one
+      // row, and it never covers the line being typed. While the panel stays visible on the same
+      // caret line, the last side is kept if that side still fits (count changes must not flip it).
       const kx::Rect area{wa.left, wa.top, wa.right, wa.bottom};
       const kx::Rect caretLine{at.x, at.y - 2 - lineAbove, at.x + 8, at.y - 2};
+      const bool sameLine = stickyHow_ == 0 || stickyHow_ == 1 || stickyHow_ == 2;
+      const bool stick = hwnd_ && IsWindowVisible(hwnd_) && sameLine &&
+                         abs(caretLine.top - stickyTop_) <= 2 && abs(caretLine.bottom - stickyBottom_) <= 2;
       // A list that fits neither above nor below is re-flowed (one row first, then wrapped rows or
       // columns) inside the real room on one side of the caret; see kx::FitCandidates.
       POINT at2 = at;
       int how = -1, shown = 0;
       bool vert = vertical_;
       const int natW = ww, natH = wh;
-      kx::Rect placed = kx::FitCandidates(widths, vertical_, caretLine, area, geom, &cells_, &shown, &how, &vert);
+      kx::Rect placed = kx::FitCandidates(widths, vertical_, caretLine, area, geom, &cells_, &shown, &how, &vert,
+                                         pageSize, stick ? stickyHow_ : -1);
       vertical_ = vert;
       if (placed.Width() != natW || placed.Height() != natH || shown != (int)items_.size())
         Trace("cand relayout " + std::to_string(natW) + "x" + std::to_string(natH) + " -> " +
@@ -175,6 +182,13 @@ class CandWin {
       wh = placed.Height();
       Trace("cand place=" + std::to_string(how) + " at=" + std::to_string(at.x) + "," + std::to_string(at.y) +
             " wh=" + std::to_string(ww) + "x" + std::to_string(wh));
+      if (how == 0 || how == 1 || how == 2) {
+        stickyHow_ = how;
+        stickyTop_ = caretLine.top;
+        stickyBottom_ = caretLine.bottom;
+      } else {
+        stickyHow_ = -1;
+      }
     }
     SetWindowPos(hwnd_, HWND_TOPMOST, at.x, at.y, ww, wh, SWP_NOACTIVATE | SWP_SHOWWINDOW);
     // Some hosts (WebView2 panels such as Raycast's search, browser popups) hide their window
@@ -191,13 +205,14 @@ class CandWin {
     pick_ = {}; pressed_ = -1;
     if (force) { hintOn_ = false; KillTimer(hwnd_, 1); items_.clear(); }
     KillTimer(hwnd_, 2);
+    stickyHow_ = -1;
     ShowWindow(hwnd_, SW_HIDE);
   }
   // Mode hint ("中"/"英"): the candidate window for 400 ms, so the switch is visible without
   // a second window class and without touching the keyboard. The modifier-up that follows the
   // switch runs Update() -> Hide(), so the window is held until the timer fires.
   void Hint(const std::wstring &s, POINT at) {
-    Show({s}, at, 20, true);
+    Show({s}, at, 20, true, 1);
     hintOn_ = true;
     if (hwnd_) SetTimer(hwnd_, 1, 400, nullptr);
   }
@@ -310,6 +325,8 @@ class CandWin {
   HWND fgRoot_ = nullptr;  // foreground root the list was shown for (timer 2 hides when it changes)
   int lineH_ = 24;
   int dpi_ = 0;
+  int stickyHow_ = -1;  // last side (0 below / 1 above / 2 right) while the panel stayed visible; cleared in Hide()
+  int stickyTop_ = 0, stickyBottom_ = 0;  // caret line that side was chosen for
   static const int kFontPx = 24;  // px at 96 DPI (0.1.3: a fixed 18 px, never DPI-scaled)
   int S(int px) const { return MulDiv(px, dpi_ ? dpi_ : 96, 96); }
 };
@@ -524,7 +541,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
 
   void ResetInput() {
     ++generation_;
-    pending_ = pendUp_ = pendEaten_ = paste_ = switch_ = hint_ = cands_ = false;
+    pending_ = pendUp_ = pendEaten_ = paste_ = switch_ = hint_ = cands_ = newline_ = newlineExt_ = endFailed_ = commitWritten_ = commitFailed_ = false;
     pendW_ = 0;
     chord_ = KxChord();
     last_ = POINT{-1, -1}; lastH_ = 0;
@@ -664,6 +681,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
       pending_ = false;
       if (same) return pendEaten_;
     }
+    newline_ = false;  // only the key that set it (test + real call of one Return) may use it
     int sym = KeySym(w, l), mask = Mask();
     // Tab is the shared "expand" key (Linux/macOS behave the same): with an open composition it
     // goes to Rime, where win_quick toggles the multi-column list and the text stays in preedit
@@ -693,6 +711,15 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
       // schema resets full_shape), must not flip it back. Apply before the key, publish after.
       if (kx::ApplyShape(sess_)) Trace("shape applied");
       eaten = kx_key(sess_, sym, m | (up ? kRelease : 0)) != 0;
+      // A Return Rime lets through while a preedit is open (deferred "hello." / "hello-") is a
+      // genuine newline (shared hello-dot-return): Rime committed the held text. Passed on with
+      // our composition still open, the app spends it ending the composition (no CR LF). Letting
+      // it through after a sync commit is not enough either: IMM32/CUAS hosts (WinForms) apply
+      // the result after the key, so the newline lands before the text (VM fd02caa). Claim it;
+      // FinishNewline re-sends one tagged Return once the commit is really in the document.
+      newline_ = sym == 0xff0d && !up && !eaten && comp_ != nullptr && GetMessageExtraInfo() != kNewlineTag;
+      if (newline_) { eaten = true; endFailed_ = commitWritten_ = commitFailed_ = false; }
+      newlineExt_ = newline_ && ((l >> 24) & 1);
       // key_bindings: Shift+space toggles full_shape (the Ctrl chords never reach Rime here).
       if (kx::NoteShape(sess_, sym == 0x20 && (m & kShift) && !up)) Trace("shape held");
       Trace("key sym=" + std::to_string(sym) + " m=" + std::to_string(m) + (up ? " up" : "") + " eaten=" + (eaten ? "1" : "0"));
@@ -779,6 +806,42 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     Trace("hint [" + kx::Utf8(s) + "]");
   }
 
+  // The claimed Return (see Process), after Handle's Update. Only a commit that is really in the
+  // document (sync lock granted, the commit's SetText accepted, EndComposition succeeded, our
+  // composition closed) gets the newline:
+  // one Return is re-sent, tagged so it can never be claimed again, queued behind the app's own
+  // handling of the commit. Otherwise (lock refused -> commit only queued async, or the end was
+  // refused) the Return stays swallowed: text kept, that newline lost, never newline-before-text.
+  // A failed SendInput is traced; the newline is then lost too (the text is not).
+  bool FinishNewline() {
+    if (!newline_) return false;
+    newline_ = false;
+    if (comp_ || endFailed_ || commitFailed_ || !commitWritten_) {
+      Trace("newline: commit not confirmed, Return swallowed");
+      return true;
+    }
+    // The user's Return is normally still down here. A re-sent key-down on a held key carries the
+    // previous-state bit (lParam bit 30), and Chromium/Electron drop such a '\r' until the field has
+    // seen a fresh Return (crbug.com/319100: accept_carriage_return_), so the first newline in every
+    // field was lost (E40 host f19f39f). Release it first so the re-sent Return is a fresh press.
+    INPUT in[3] = {};
+    const DWORD ext = newlineExt_ ? KEYEVENTF_EXTENDEDKEY : 0;  // keypad Enter stays keypad Enter
+    for (int i = 0; i < 3; i++) {
+      in[i].type = INPUT_KEYBOARD; in[i].ki.wVk = VK_RETURN;
+      in[i].ki.dwFlags = ext | (i != 1 ? KEYEVENTF_KEYUP : 0); in[i].ki.dwExtraInfo = (ULONG_PTR)kNewlineTag;
+    }
+    const UINT lead = (GetAsyncKeyState(VK_RETURN) & 0x8000) ? 1 : 0;  // release only a held Return
+    const UINT want = 2 + lead;  // [up] down up
+    const UINT sent = SendInput(want, &in[1 - lead], sizeof(INPUT));
+    if (sent == want) Trace(lead ? "newline: committed, held Return released, re-sent" : "newline: committed, Return re-sent");
+    else if (sent == want - 1) {
+      // Only the key-down went in (the newline is delivered); never leave Return logically held.
+      const UINT up = SendInput(1, &in[2], sizeof(INPUT));
+      Trace(up == 1 ? "newline: re-sent, key-up retried" : "newline: re-sent, key-up lost");
+    } else Trace("newline: SendInput failed, newline lost");
+    return true;
+  }
+
   bool Handle(ITfContext *c, WPARAM w, LPARAM l, bool up) {
     EnsureContext(c);
     bool eaten = Process(w, l, up);
@@ -787,6 +850,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     // closes the association list (Rime state changed) and must still reach the app.
     Update(c);
     if (hint_) { hint_ = false; ShowHint(); }
+    if (!up && FinishNewline()) return true;
     if (paste_ && !up) {
       // TSF already ate this Ctrl+V (OnTestKeyDown); the held text is written, composition closed,
       // so a re-sent V reaches the app as a plain paste (paste_ needs comp_, now null).
@@ -873,7 +937,9 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     auto it = kx::Current().find("candidate_layout");
     c->AddRef(); auto context = Adopt(c);
     HWND hwnd = GetFocus();
-    cand_.Show(cands, at, lineH, it == kx::Current().end() || it->second != "horizontal",
+    int pageSize = 9;
+    if (f.size() > 2) { char *end = nullptr; long v = strtol(f[2].c_str(), &end, 10); if (end != f[2].c_str() && v > 0) pageSize = (int)v; }
+    cand_.Show(cands, at, lineH, it == kx::Current().end() || it->second != "horizontal", pageSize,
                [this, context, generation, hwnd, ctx](int item) { PickCandidate(context.get(), generation, hwnd, ctx, item); });
   }
 
@@ -896,16 +962,21 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     if (!commit.empty()) {
       if (!comp_) Begin(ec, c);
       if (generation != generation_ || !Same(c, owner_)) return;
+      if (!comp_) commitFailed_ = true;
       if (comp_) {
         comp_->AddRef();
         auto composition = Adopt(comp_);
         ITfRange *r = nullptr;
         if (SUCCEEDED(composition->GetRange(&r)) && r) {
-          r->SetText(ec, 0, commit.c_str(), (LONG)commit.size());
+          // Only a commit the document really accepted may release a claimed Return (FinishNewline).
+          if (SUCCEEDED(r->SetText(ec, 0, commit.c_str(), (LONG)commit.size()))) commitWritten_ = true;
+          else commitFailed_ = true;
           if (generation != generation_ || !Same(composition.get(), comp_)) { r->Release(); return; }
           r->Collapse(ec, TF_ANCHOR_END);
           SetSel(ec, c, r);
           r->Release();
+        } else {
+          commitFailed_ = true;
         }
         if (generation != generation_ || !Same(composition.get(), comp_)) return;
         End(ec);
@@ -1028,7 +1099,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     auto context = Adopt(owner_);
     comp_ = nullptr; owner_ = nullptr;
     shownPre_.clear();
-    if (composition) composition->EndComposition(ec);
+    if (composition && FAILED(composition->EndComposition(ec))) endFailed_ = true;
   }
 
   static void SetSel(TfEditCookie ec, ITfContext *c, ITfRange *r) {
@@ -1061,6 +1132,10 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   bool hint_ = false;  // a mode switch is waiting to be shown after the next Update
   bool switch_ = false;  // a mode switch happened in the test path: Tail() commits it
   bool pending_ = false, pendUp_ = false, pendEaten_ = false, paste_ = false;
+  bool newline_ = false, newlineExt_ = false;  // claimed Return: FinishNewline re-sends it after the commit
+  bool endFailed_ = false;  // the host refused EndComposition since the claim
+  bool commitWritten_ = false, commitFailed_ = false;  // commit SetText accepted / refused since the claim
+  static constexpr LPARAM kNewlineTag = 0x4B584E4C;  // 'KXNL' in dwExtraInfo: our own re-sent Return
   bool cands_ = false;  // candidates (incl. the association list) were showing on the last update
   WPARAM pendW_ = 0;
 };

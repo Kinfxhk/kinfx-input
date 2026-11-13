@@ -127,13 +127,13 @@ int main() {
     const CandGeom g{72, 28, 12, 40, 2, 0};
     std::vector<int> w(9, 380);
     std::vector<Rect> c; int shown = -1; bool vert = false;
-    Rect p = FitCandidates(w, true, cr, a, g, &c, &shown, &how, &vert);
+    Rect p = FitCandidates(w, true, cr, a, g, &c, &shown, &how, &vert, 9);
     Check("fit hermes repro: all 9 shown", shown == 9 && c.size() == 9);
     Check("fit hermes repro: inside, caret clear, disjoint", ok(p, c, a, cr, 0));
     Check("fit hermes repro: last item hit-testable", hitLast(c));
     // Same with a 2-px border: client = window - border, still nothing clipped.
     const CandGeom gb{72, 28, 12, 40, 2, 2};
-    p = FitCandidates(w, true, cr, a, gb, &c, &shown, &how, &vert);
+    p = FitCandidates(w, true, cr, a, gb, &c, &shown, &how, &vert, 9);
     Check("fit with border: all shown, inside client", shown == 9 && ok(p, c, a, cr, 2) && hitLast(c));
   }
   {
@@ -141,36 +141,110 @@ int main() {
     const CandGeom g{30, 14, 6, 20, 2, 1};
     std::vector<int> w(9, 60);
     std::vector<Rect> c; int shown = -1; bool vert = false;
-    Rect p = FitCandidates(w, true, Rect{100, 500, 108, 530}, area, g, &c, &shown, &how, &vert);
+    Rect p = FitCandidates(w, true, Rect{100, 500, 108, 530}, area, g, &c, &shown, &how, &vert, 9);
     Check("fit natural: unchanged column above", vert && how == 1 && p.Height() == 12 + 9 * 30 + 2 && shown == 9);
     // Short list below.
     std::vector<int> w3(3, 60);
-    p = FitCandidates(w3, true, caret, area, g, &c, &shown, &how, &vert);
-    Check("fit short: below, natural", how == 0 && vert && shown == 3 && p.top >= caret.bottom);
+    // Expectation changed with the design: page capacity 9 prefers above even for n=3 (the old rule
+    // was n >= 5, so this caret went below). This caret's line starts at y=100, so a 3-row panel
+    // does not fit above and the prefer-above path goes right of the caret instead of below.
+    p = FitCandidates(w3, true, caret, area, g, &c, &shown, &how, &vert, 9);
+    Check("fit short page, pageSize 9: not below (page capacity, not item count)", how == 2 && vert && shown == 3 && p.left >= caret.right);
     // Tall list fitting neither side becomes one row (the familiar fallback).
     const Rect strip{0, 0, 1920, 300};
-    p = FitCandidates(w, true, Rect{100, 130, 108, 160}, strip, g, &c, &shown, &how, &vert);
+    p = FitCandidates(w, true, Rect{100, 130, 108, 160}, strip, g, &c, &shown, &how, &vert, 9);
     Check("fit strip: one row", !vert && shown == 9 && c[8].top == c[0].top && ok(p, c, strip, Rect{100, 130, 108, 160}, 1));
     // Narrow + short room: rows wrap, then columns, all shown.
     const Rect narrow{0, 0, 400, 300};
     std::vector<int> w12(12, 50);
-    p = FitCandidates(w12, true, Rect{20, 130, 28, 160}, narrow, g, &c, &shown, &how, &vert);
+    p = FitCandidates(w12, true, Rect{20, 130, 28, 160}, narrow, g, &c, &shown, &how, &vert, 9);
     Check("fit narrow: all 12 shown and inside", shown == 12 && ok(p, c, narrow, Rect{20, 130, 28, 160}, 1) && hitLast(c));
     // Degenerate: room smaller than one row -> defined fallback, no crash, no clipped visible cell.
     const Rect tinyA{0, 0, 300, 40};
-    p = FitCandidates(w, true, Rect{0, 5, 8, 35}, tinyA, g, &c, &shown, &how, &vert);
+    p = FitCandidates(w, true, Rect{0, 5, 8, 35}, tinyA, g, &c, &shown, &how, &vert, 9);
     Check("fit degenerate: defined fallback, inside area", shown >= 0 && shown < 9 && p.top >= tinyA.top && p.bottom <= tinyA.bottom);
     bool clipped = false; const int cw = p.Width() - 2, ch = p.Height() - 2;
     for (auto &r : c) if (!IsEmpty(r) && (r.right > cw || r.bottom > ch)) clipped = true;
     Check("fit degenerate: hidden instead of half-drawn", !clipped);
     // One item wider than the screen: hidden, the others still shown.
     std::vector<int> wl{60, 5000, 60};
-    p = FitCandidates(wl, true, caret, area, g, &c, &shown, &how, &vert);
+    p = FitCandidates(wl, true, caret, area, g, &c, &shown, &how, &vert, 9);
     Check("fit long item: cut at the edge, all 3 shown and inside", shown == 3 && ok(p, c, area, caret, 1) && hitLast(c));
     // Empty list: no cells, no crash.
     std::vector<int> w0;
-    p = FitCandidates(w0, true, caret, area, g, &c, &shown, &how, &vert);
+    p = FitCandidates(w0, true, caret, area, g, &c, &shown, &how, &vert, 9);
     Check("fit empty: no cells", c.empty() && shown == 0);
+    // Same caret, page capacity 9, room on both sides: n=1 then n=9 then n=3 stay on one side.
+    const Rect both{100, 500, 108, 530};
+    int how1 = -1, how9 = -1, how3 = -1;
+    FitCandidates(std::vector<int>(1, 60), true, both, area, g, &c, &shown, &how1, &vert, 9);
+    FitCandidates(std::vector<int>(9, 60), true, both, area, g, &c, &shown, &how9, &vert, 9);
+    FitCandidates(std::vector<int>(3, 60), true, both, area, g, &c, &shown, &how3, &vert, 9);
+    Check("fit pageSize 9: n=1/9/3 same side", how1 == how9 && how9 == how3 && how1 == 1);
+    // Stickiness: visible below, same caret line, list still fits below -> stays below.
+    int howSticky = -1;
+    Rect stuck = FitCandidates(std::vector<int>(9, 60), true, both, area, g, &c, &shown, &howSticky, &vert, 9, 0);
+    Check("sticky below: stays below while it fits", howSticky == 0 && stuck.top >= both.bottom);
+    // Same sticky side, but the natural panel no longer fits below -> moves (does not stay below).
+    const Rect lowLine{100, 980, 108, 1010};
+    int howMoved = -1;
+    Rect moved = FitCandidates(std::vector<int>(9, 60), true, lowLine, area, g, &c, &shown, &howMoved, &vert, 9, 0);
+    Check("sticky below: moves when it no longer fits", howMoved != 0 && moved.bottom <= lowLine.top);
+    // Different caret line: the caller must not pass the old side. Passing sticky 0 keeps below;
+    // dropping it (stickySide -1, what Show does when top/bottom differ) follows the full-page side.
+    // Expectation changed with this design: a 1-item list at y=200 used to fit above (howOther == 1),
+    // but a full page of 9 is 284 px and only 198 px is free above, so the page side is right.
+    int howStuck = -1, howOther = -1;
+    const Rect other{100, 200, 108, 230};
+    FitCandidates(std::vector<int>(1, 60), true, other, area, g, &c, &shown, &howStuck, &vert, 9, 0);
+    FitCandidates(std::vector<int>(1, 60), true, other, area, g, &c, &shown, &howOther, &vert, 9, -1);
+    Check("different caret line: sticky ignored", howStuck == 0 && howOther == 2 && howOther != howStuck);
+    // Side follows a FULL page, not the current item count. VM (DLL 630966d): caret line ~y 62..92
+    // in a work area whose top is 0, so ~60 px above. n=1 (52 px) fitted above; n=9 (356 px) did
+    // not, so preferAbove sent it right. A full page of 9 does not fit above either, so n=1/9/3
+    // must share that side (right), not flip above <-> right as the list grows and shrinks.
+    const Rect topLine{91, 62, 99, 92};
+    const Rect topArea{0, 0, 1024, 728};
+    const CandGeom gt{38, 14, 6, 20, 2, 1};
+    int howT1 = -1, howT9 = -1, howT3 = -1;
+    FitCandidates(std::vector<int>(1, 40), true, topLine, topArea, gt, &c, &shown, &howT1, &vert, 9);
+    FitCandidates(std::vector<int>(9, 40), true, topLine, topArea, gt, &c, &shown, &howT9, &vert, 9);
+    FitCandidates(std::vector<int>(3, 40), true, topLine, topArea, gt, &c, &shown, &howT3, &vert, 9);
+    Check("fit top edge, pageSize 9: n=1/9/3 same side", howT1 == howT9 && howT9 == howT3 && howT1 != -1);
+    // Bottom edge: only room above. A short list used to drop below; a full page cannot, so both stay above.
+    const Rect botLine{100, 980, 108, 1010};
+    int howB1 = -1, howB9 = -1;
+    FitCandidates(std::vector<int>(1, 60), true, botLine, area, g, &c, &shown, &howB1, &vert, 9);
+    FitCandidates(std::vector<int>(9, 60), true, botLine, area, g, &c, &shown, &howB9, &vert, 9);
+    Check("fit bottom edge, pageSize 9: n=1/9 same side", howB1 == howB9 && howB1 == 1);
+    // Short page (5) with room both ways: n=1 and n=5 share the side a full page of 5 would take.
+    int howP1 = -1, howP5 = -1;
+    FitCandidates(std::vector<int>(1, 60), true, both, area, g, &c, &shown, &howP1, &vert, 5);
+    FitCandidates(std::vector<int>(5, 60), true, both, area, g, &c, &shown, &howP5, &vert, 5);
+    Check("fit pageSize 5, room both ways: n=1 and n=5 same side", howP1 == howP5 && howP1 != -1);
+    // stickySide 2: visible on the right, same caret, list grows but the right still holds it.
+    // Mid-screen (room above): without sticky 2 a page of 9 goes above, so this must stay right
+    // only because stickySide 2 is honoured.
+    int howR = -1;
+    Rect stayed = FitCandidates(std::vector<int>(3, 60), true, both, area, g, &c, &shown, &howR, &vert, 9, 2);
+    Check("sticky right: stays right while it fits", howR == 2 && stayed.left >= both.right);
+  }
+  {
+    // P3 (Hermes 26cbc89): caret at the right edge of a strip with no room above/below.
+    const Rect strip{0, 0, 300, 40};
+    const Rect cr{292, 0, 300, 40};
+    Rect p = PlaceCandidate(cr, 130, 40, strip, 2, false, &how);
+    Check("P3 right edge: goes left, clear of caret", how == 3 && !Intersects(p, cr) && p.left >= 0 && p.right <= 290);
+    const Rect cl{0, 0, 8, 40};
+    p = PlaceCandidate(cl, 500, 40, strip, 2, false, &how);
+    Check("P3 left edge, too wide: right side shrunk, clear of caret", how == 2 && !Intersects(p, cl) && p.right <= 300);
+    const CandGeom g{30, 14, 6, 20, 2, 1};
+    std::vector<int> w3(3, 60);
+    std::vector<Rect> c; int shown = -1; bool vert = false;
+    p = FitCandidates(w3, true, cr, strip, g, &c, &shown, &how, &vert);
+    bool clipped = false; const int cw = p.Width() - 2, ch = p.Height() - 2;
+    for (auto &r : c) if (!IsEmpty(r) && (r.right > cw || r.bottom > ch)) clipped = true;
+    Check("P3 via FitCandidates: caret clear, no clipped visible cell", !Intersects(p, cr) && !clipped);
   }
   std::printf("%d FAIL\n", fails);
   return fails ? 1 : 0;
