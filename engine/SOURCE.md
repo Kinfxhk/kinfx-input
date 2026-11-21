@@ -1,13 +1,35 @@
 # engine/
 
-- `rime/`：由 Kinfxhk/kinfx-ime tag v0.5.10（`2c4b38e691c268ef71564b58ed1560d6b3d75ee1`）複製過來。schemas/kinfx-quick、lexicon/hk、lexicon/en、schemas/rime.lua、schemas/lua。之後在這裡改過：
-  - `lua/assoc.lua`：選字後 Enter 關聯想並換行（72b72a2）。
-  - `kinfx_en_names.txt`：短英文 token（7580700）；0.1.1 加 init mcp gank rekt pog kekw copium gg wp gl，刪除錯碼的 `yml	ym`。
-  - 0.1.1 `lua/english_mix.lua`：英文詞＋「.」＋中文不再卡住（hello.vd1 → hello。好，只有 com／js／md 等後綴才留英文）；Enter ? ! : ; ) 上屏英文詞；刪除「5 個字母英文開頭按空白上屏」（fogge␣1 變回 炊圭水）；縮寫 don't／it's；名表 2 個字母詞只限空白上屏；不同 session 不再共用未上屏英文。
-  - 0.1.1 `kinfx_quick.schema.yaml`：recognizer url 加縮寫 pattern。
-  - 0.1.2 `lua/english_mix.lua`：正在打字時按下貼上（Ctrl+V），已頂字的中文照上屏，字母清除，再交回給 app 貼上（與「先 Esc 再貼」結果一樣）。Mac 的 ⌘V 不經過引擎；TextEdit 貼上會保留未上屏字母，連 Apple 內建輸入法都是這樣，IMK 層面無法修復，做法是先 Esc 再貼。
-  - 0.1.4 `lua/english_mix.lua`：失焦（按滑鼠到別處、轉視窗）時，殼送 F35（0xffe0）。英文字母照打出來那樣上屏（hel → hel，vdhel → vdhel），速成碼照 Enter 上屏（vd → 好），不會整段消失。Windows 殼在 OnCompositionTerminated 寫入；Mac 在 deactivateServer；Linux 用 context property `kinfx_blur`（每鍵更新）作為 IBus COMMIT 模式的 preedit，由 ibus 寫回所離開的那一格（直接 commit_text 會落到下一格）。
-- `prelude/`：rime/rime-prelude `082425ea0684bca36474415d4a0e8db9b016487e`（default、key_bindings、punctuation、symbols，LGPL-3.0）。
-- `licenses/`：kinfx-ime 的 LICENSE、NOTICE，與詞庫 NOTICE。
+本目錄的 `rime/` 由核心引擎倉庫 [`Kinfxhk/kinfx-ime`](https://github.com/Kinfxhk/kinfx-ime) 自動同步，**請勿直接手改 `engine/rime/`**。
 
-要改打字行為就在這裡改，不要回去改公開 repo `kinfx-ime`（停在 v0.5.10）。
+- **單一核心引擎來源**：`Kinfxhk/kinfx-ime`
+- **Schema 版本**：`v0.6.0`
+- **同步來源參考**：`main`（commit `e6c2d31aa35cd7511e37399509503c2b2f14c692`）
+- **同步時間（UTC）**：`2026-11-21T14:12:57Z`
+
+## 如何更新引擎
+
+所有中英混打、速成次序、聯想詞與詞庫改動，一律先在 `kinfx-ime` 修改並通過回歸測試，再於本 repo 執行：
+
+```bash
+# 由本地鄰近目錄同步
+python3 scripts/sync-engine.py --from-dir ../kinfx-ime
+
+# 或由 GitHub 指定 tag 同步
+python3 scripts/sync-engine.py --ref v0.6.0
+
+# 檢查本目錄與上游是否零漂移（CI 用）
+python3 scripts/sync-engine.py --from-dir ../kinfx-ime --check
+```
+
+## 獨立版專屬覆寫（Overlay）
+
+`scripts/sync-engine.py` 在同步 `kinfx_quick.schema.yaml` 時只會套用兩項最小覆寫，其餘所有 Lua 與詞庫均與 `kinfx-ime` 逐位元一致：
+
+1. **移除 `punctuator/half_shape`**：由 `engine/prelude/punctuation.yaml` 統一控制三平台單鍵標點與半形預設，避免兩份標點表衝突。
+2. **移除 `recognizer/patterns/reverse_lookup`**：讓反引號 `` ` `` 直接輸出半形 ASCII，不彈出拼音反查選單。
+
+## 其他目錄
+
+- `prelude/`：`rime/rime-prelude` 基底加上 KINFX Input 共用 `punctuation.yaml`（LGPL-3.0）。
+- `licenses/`：由 `kinfx-ime` 同步的 `LICENSE`、`NOTICE` 與詞庫授權說明。

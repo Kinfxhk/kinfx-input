@@ -26,5 +26,13 @@ Bundled or dependent schema/dictionary packages keep their own licenses:
   permissive, notice required) plus Gmail/GMAIL rows in lexicon/en/extras.tsv.
   This is the M5 / melt_eng channel. rime-ice (GPL-3.0) is not included.
 
+- scripts/export_quick_cin.py writes exports/kinfx_quick.cin from
+  schemas/kinfx-quick/kinfx_quick.dict.yaml. That file is a static Sucheng
+  code table, so the rime-quick / rime-cangjie / rime-essay LGPL-3.0 terms
+  above apply (licenses/rime-quick-LGPL-3.0.txt, third_party/rime-quick/LICENSE).
+  The exporter script is original code (MIT). The .cin file is generated and
+  is not committed.
+
 Do not invent proprietary dictionaries. Ship only open-licensed data and keep
-attribution. Do not relicense lexicon/ as MIT.
+attribution. Do not relicense lexicon/ as MIT. Do not relicense the exported
+.cin table as MIT.

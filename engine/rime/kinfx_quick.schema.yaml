@@ -6,7 +6,7 @@
 schema:
   schema_id: kinfx_quick
   name: KINFX 中英混打輸入法 · 速成
-  version: "0.5.10"
+  version: "0.6.0"
   author:
     - KINFX
     - 速成規則／碼表源流見 NOTICE（rime-quick / rime-cangjie）
@@ -146,6 +146,8 @@ english:
   empty_shift: noop
   # 短碼（1–2 個字母）離開焦點（撳第二個位、換視窗）：letters＝留住字母（預設）｜commit＝上屏首選字
   blur_short: letters
+  # KINFX Input overlay: half_shape is ASCII, full_shape is Chinese.
+  ascii_punct_default: true
   # 唔喺詞表嘅英文（公司名、識別字）：英文開頭夠 hold_min 個字母之後，再留多 hold_extra 個；
   # 7 個字母或以上（unknown_space_min）撳空白上屏，其餘撳左 Shift。英文詞嘅開頭（const、async）
   # 5 個字母起都可以撳空白，6 個字母除外（三對速成碼，空白係翻頁）。0＝關。
@@ -179,16 +181,14 @@ english:
 association:
   enable: true
   max: 36
-  # 揀字後第一下空白：type＝關聯想再打空格（預設）｜page＝Windows（翻聯想頁、吞咗）
+  # 揀字後第一下空白：type＝關聯想再打空格（中英混打順）｜page＝Windows（翻聯想頁、吞咗）
   space: type
 
 assoc_translator:
   tag: kinfx_assoc
 
 # v0.5.4：唔再將拼音反查混入速成候選（Windows 速成冇；`j` 原本出 十|就|將…，
-# 空白會翻去拼音頁）。0.1.8：拼音反查嗰條 recognizer pattern 都刪咗 —— ` 要即刻出返 `（打
-# code 用），一撳 ` 就彈反查選單就係「下下要揀」。要返反查：custom 加返 reverse_lookup 嗰條
-# pattern 同 abc_segmentor/extra_tags: [reverse_lookup]。
+# 空白會翻去拼音頁）。拼音反查照用 ` 開頭。要還原：custom 加 abc_segmentor/extra_tags: [reverse_lookup]。
 
 reverse_lookup:
   dictionary: luna_pinyin
@@ -211,9 +211,8 @@ menu:
 
 punctuator:
   import_preset: default
-  # 0.1.8：標點全部由 engine/prelude/punctuation.yaml（三平台共用）單鍵直出，呢度唔再覆寫，
-  # 免得兩份表打架。' " 由半形改返 ‘’ “”（punctuation.yaml 的 pair），/ \ _ $ % # @ 仍然半形。
-  # 寫 code：Ctrl+. 切 ASCII 標點（同 Windows 一樣），所有符號變半形直出；再撳返中文標點。
+  # KINFX Input overlay (synced by scripts/sync-engine.py):
+  # 標點全部由 engine/prelude/punctuation.yaml（三平台共用）單鍵直出，呢度唔再覆寫。
   # 數字後面嘅 . : , ' 留半形（20,000、3.14、12:30）；連撳兩下先出中文標點。
   digit_separators: ".:,'"
 
@@ -260,5 +259,5 @@ recognizer:
     # v0.5.9：單碼後面即刻大楷（iPhone、eSIM、xAI）成串留拉丁，唔再頂成 戈Phone。
     uppercase: "^[a-z][A-Z][-_+.'0-9A-Za-z]*$|[A-Z][-_+.'0-9A-Za-z]*$"
     # v0.5.10：英文詞中間嘅「-」後面再有字母（bait-and-switch），成個詞留拉丁。
-    # 0.1.1：縮寫 don't／it's 成個詞留拉丁（english_mix.lua 嘅 APOS_STEM 先會留住 '）。
+    # v0.6.0：縮寫 don't／it's 成個詞留拉丁（english_mix.lua 嘅 APOS_STEM 先會留住 '）。
     url: "^(www[.]|https?:|ftp[.:]|mailto:|file:).*$|[a-z]+[.].+$|^[a-z]+-[A-Za-z0-9][-.A-Za-z0-9]*$|^[A-Za-z]+'[a-z]+$"

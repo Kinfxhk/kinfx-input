@@ -6,7 +6,7 @@
 
 **最新版本：[v0.1.13](https://github.com/Kinfxhk/kinfx-input/releases/tag/v0.1.13)**（macOS／Windows／Linux）
 
-> 想用新版本，請用這個 repo。舊的 Rime 方案包 [KINFX IME](https://github.com/Kinfxhk/kinfx-ime)（v0.5.12）已進入維護模式，不再新增功能。
+> **雙軌同步維護**：本 repo 是獨立直裝版外殼（Windows TSF／macOS IMK／Linux IBus）；核心引擎由 [KINFX IME](https://github.com/Kinfxhk/kinfx-ime) 統一維護，並透過 `scripts/sync-engine.py` 同步到本 repo。慣用小狼毫／鼠鬚管／Fcitx5 的用家可繼續使用 `KINFX IME`，兩邊共用同一套引擎。
 
 ## 特色
 
@@ -23,10 +23,10 @@
 | | **KINFX Input**（本 repo，獨立版） | **KINFX IME**（Rime 方案包） |
 | --- | --- | --- |
 | 安裝 | 直接下載安裝包 | 先裝宿主（小狼毫／鼠鬚管／Fcitx）再裝方案 |
-| 引擎 | 內嵌 librime，隨安裝包 | 依賴宿主提供 |
+| 引擎 | 內嵌 librime，隨安裝包（由 `kinfx-ime` 同步） | 核心引擎正本（依賴宿主提供 librime） |
 | 設定 | 設定視窗，即時生效 | 編輯 yaml／lua |
 | 更新 | 下載新安裝包 | 更新方案檔 |
-| 狀態 | 持續維護 | 維護模式（v0.5.12） |
+| 狀態 | 持續維護（三平台殼） | 持續維護（單一核心引擎 + 粵拼／`.cin`） |
 
 ## 安裝
 
@@ -86,14 +86,16 @@ ibus restart
 
 設定只經視窗。程式把開關寫入 `settings.json`，再生成 Rime custom，用戶不應看到 yaml／lua。
 
-開關只此幾項：
+開關只此幾項（對應 `settings-spec.json`）：
 
-- 每頁候選：9 或 5
-- 英文空白：安全／只限長詞／關
-- 聯想詞：開／關
-- 選字後空白：翻頁（預設，與 Windows 速成相同）／打出空格
-- 常用詞前綴：熱門／全部／關
-- 左 Shift 無輸入時：不做／臨時英文
-- 預編輯：字母／字根
+- 每頁候選數：9 個（預設）／5 個
+- 英文詞後按空白：安全詞上屏（預設）／只限長詞／關閉
+- 聯想詞：開啟（預設）／關閉
+- 選字後按空白：輸入空格（預設）／翻頁（Windows 速成做法）
+- 常用詞前綴：熱門（預設）／全部／關閉
+- 未輸入時按左 Shift：不動作（預設）／臨時英文
+- 短碼離開焦點：保留英文字母（預設）／上屏首選字
+- 預編輯顯示：字母（預設）／字根
+- 選字表：直排（預設）／橫排
 
 不要把 `unknown_space_min`、`hold_min` 等數字暴露為用戶欄位。

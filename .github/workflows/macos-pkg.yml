@@ -1,0 +1,16 @@
+name: macos-pkg
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Engine self-test
+        run: bash mac/build.sh selftest
+      - name: Build universal direct .pkg
+        run: bash mac/build.sh pkg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KINFX-Input-macOS
+          path: mac/build/KINFX-Input-*.pkg

@@ -566,6 +566,9 @@ local function read_env(env)
   -- does nothing) | ascii (librime inline_ascii: switch to English).
   env.empty_shift = config_str(config, "english/empty_shift", "noop")
   env.blur_short = config_str(config, "english/blur_short", "letters")
+  -- false (default, Rime hosts): half_shape uses Chinese punctuation unless ascii_punct is on.
+  -- true (KINFX Input standalone overlay): half_shape is ASCII; full_shape is Chinese.
+  env.ascii_punct_default = pm.config_bool(config, "english/ascii_punct_default", false)
   -- english/hold_min: once an English prefix of this many letters breaks,
   -- keep holding up to hold_extra more letters as an unknown word (company /
   -- product names). 0 = off. Chinese output is still v0.4.1 for every key
@@ -1434,6 +1437,7 @@ local function func(key, env)
   local ctx = env.engine.context
   if r == kNoop and not key:release() and not (key:ctrl() or key:alt() or key:super())
      and is_symbol(key.keycode) and not ctx:is_composing()
+     and (env.ascii_punct_default or (key.keycode ~= 0x5d and key.keycode ~= 0x7d))
      and ctx:get_property("kinfx_punct_tail") == "latin" then
     commit_text(env, string.char(key.keycode), true)
     return kAccepted
@@ -1570,7 +1574,8 @@ function process(key, env)
        or ((kc == 0x28 or shift_nine) and not env.paren_pick) then
       close_assoc(ctx)
       if shift_nine and kc ~= 0x28 then
-        env.engine:commit_text(full_shape(env) and "（" or "(")
+        local wide_paren = env.ascii_punct_default and full_shape(env) or (not ctx:get_option("ascii_punct"))
+        env.engine:commit_text(wide_paren and "（" or "(")
         return kAccepted
       end
       return kNoop
@@ -1743,11 +1748,16 @@ function process(key, env)
   -- Chinese (mac → 百鍊, then OS). A 1–2 code that is not being tracked (vd)
   -- is the same signal: commit the letters, do not let the speller top them out.
   if plain and kc >= 0x41 and kc <= 0x5a then
-    if S.tracking and S.raw ~= "" then
+    -- Keep 1-letter camelCase (iPhone/eSIM/xAI), 3+ letter runs (macOS), and
+    -- listed 2-letter names in Latin; 2-letter Sucheng codes (vd + API -> 好API)
+    -- still top out as Chinese.
+    if S.tracking and S.raw ~= "" and (#S.raw ~= 2 or env.names[S.raw]) then
       commit_word(env, ctx, S.raw)
       return kNoop
     end
-    if input:match("^[a-z]+$") and #input >= 1 and #input <= 2 then
+    -- Single-letter lowercase before uppercase (iPhone, iPad, eSIM, xAI) stays Latin;
+    -- non-English 2-letter Sucheng codes (vd + API -> 好API) still top out as Chinese.
+    if input:match("^[a-z]+$") and #input == 1 then
       commit_word(env, ctx, input)
       return kNoop
     end
@@ -1813,6 +1823,10 @@ function process(key, env)
       if kc == 0x2e then
         return hold_latin(env, ctx, S.raw, ".", text .. "。") -- openai.com, not OpenAI.com
       end
+      if not env.ascii_punct_default and (kc == 0x5d or kc == 0x7d) then
+        commit_word(env, ctx, text)
+        return kNoop
+      end
       commit_word(env, ctx, text .. string.char(kc))
       return kAccepted
     end
@@ -1845,6 +1859,10 @@ function process(key, env)
     end
     if kc == 0x2e then
       return hold_latin(env, ctx, S.raw, ".", S.raw .. "。")
+    end
+    if not env.ascii_punct_default and (kc == 0x5d or kc == 0x7d) then
+      commit_word(env, ctx, S.raw)
+      return kNoop
     end
     commit_word(env, ctx, S.raw .. string.char(kc))
     return kAccepted

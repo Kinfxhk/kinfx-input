@@ -1,0 +1,38 @@
+{
+  "source_repo": "Kinfxhk/kinfx-ime",
+  "schema_version": "0.6.0",
+  "source_ref": "main",
+  "source_commit": "e6c2d31aa35cd7511e37399509503c2b2f14c692",
+  "synced_at": "2026-11-21T14:12:57Z",
+  "overlay": [
+    "remove punctuator/half_shape (delegated to engine/prelude/punctuation.yaml)",
+    "set english/ascii_punct_default: true (half_shape ASCII, full_shape Chinese)",
+    "remove recognizer/patterns/reverse_lookup (backtick stays ASCII)"
+  ],
+  "files": {
+    "engine/licenses/kinfx-ime-LICENSE.txt": "50435bf3f47d9e8a",
+    "engine/licenses/kinfx-ime-NOTICE.txt": "cb70ba1a3126097b",
+    "engine/licenses/lexicon-NOTICE.txt": "df741ebbf4e6ec26",
+    "engine/licenses/rime-quick-LGPL-3.0.txt": "da7eabb7bafdf7d3",
+    "engine/rime/kinfx_assoc.dict.yaml": "2c026157472a612b",
+    "engine/rime/kinfx_assoc.schema.yaml": "b434aaf94f872ee9",
+    "engine/rime/kinfx_capture.txt": "8256539083ca5a5a",
+    "engine/rime/kinfx_en.dict.yaml": "c603c91b2ac1ee9e",
+    "engine/rime/kinfx_en.schema.yaml": "0b867c6062cb07f7",
+    "engine/rime/kinfx_en_names.txt": "018038dd3a341902",
+    "engine/rime/kinfx_en_unsafe.txt": "414836eeecd192ac",
+    "engine/rime/kinfx_hk_idioms.dict.yaml": "c1ea0b1dc4a3959d",
+    "engine/rime/kinfx_hk_words.dict.yaml": "bf3d7458808f2783",
+    "engine/rime/kinfx_names.dict.yaml": "845f79085e7aa392",
+    "engine/rime/kinfx_names.schema.yaml": "5d3ffbd7db24ad8c",
+    "engine/rime/kinfx_phrase.schema.yaml": "9e227ff72d9d1479",
+    "engine/rime/kinfx_quick.dict.yaml": "b5789f7f47456826",
+    "engine/rime/kinfx_quick.schema.yaml": "242232722bed536a",
+    "engine/rime/kinfx_quick_phrase.dict.yaml": "39a8a9ff6079b738",
+    "engine/rime/lua/assoc.lua": "71c09664cbdf553d",
+    "engine/rime/lua/english_mix.lua": "8d5e8c3f79bc3862",
+    "engine/rime/lua/phrase_mix.lua": "b5fa5140a993dbdf",
+    "engine/rime/lua/win_quick.lua": "ceceda7494138047",
+    "engine/rime/rime.lua": "f4289712ac09064c"
+  }
+}
