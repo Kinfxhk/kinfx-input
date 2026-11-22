@@ -50,8 +50,9 @@ inline Rect PlaceCandidate(Rect caret, int w, int h, const Rect &area, int gap, 
   const bool rightFits = right.right <= area.right && right.bottom <= area.bottom;
   if (stickySide == 2 && rightFits) { if (how) *how = 2; return FitInside(right, area); }
   if (aboveFits && preferAbove) { if (how) *how = 1; return FitInside(above, area); }
-  // A tall list that cannot go above must not hang over the rows below the caret either: the
-  // next input of a Qt/Electron form lives there. Put it beside the caret instead.
+  // When preferAbove is explicitly requested and above does not fit, rightFits is only used for
+  // that caller; normal candidate lists default to preferAbove = false so they anchor below the
+  // caret line instead of hanging beside and covering text to the right of the caret.
   if (preferAbove && rightFits) { if (how) *how = 2; return FitInside(right, area); }
   if (belowFits) { if (how) *how = 0; return FitInside(below, area); }
   if (aboveFits) { if (how) *how = 1; return FitInside(above, area); }
@@ -151,7 +152,10 @@ inline Rect FitCandidates(const std::vector<int> &widths, bool vertical, Rect ca
                           const CandGeom &g, std::vector<Rect> *cells, int *visible, int *how, bool *vertOut,
                           int pageSize = 9, int stickySide = -1) {
   const int n = (int)widths.size();
-  const bool preferAbove = vertical && pageSize >= 5;
+  // Default below the caret line (matching Windows Quick and macOS CandidatePanelGeometry): top
+  // edge stays anchored at caret.bottom + gap as candidate count changes (1 -> 9 -> assoc), with
+  // zero vertical jump, and only flips above near the bottom edge when a full page cannot fit below.
+  const bool preferAbove = false;
   const int big = 1 << 30;
   int W = 0, H = 0;
   bool vert = vertical;
