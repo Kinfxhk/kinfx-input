@@ -2,10 +2,10 @@
 # For each case: clear box A, type keys through KINFX (TSF + SendInput), then a real mouse click
 # moves focus (box B, or inside box A), and the text left in box A is recorded.
 # Tokens: {SP} {ENTER}; other chars typed literally. Mode per case: B = click box B, A = click inside box A.
-# Output: C:\Users\KinTest\inst\kx-blur.txt (+ kx-blur-trace.txt), progress in kx-step.txt
+# Output: $env:USERPROFILE\inst\kx-blur.txt (+ kx-blur-trace.txt), progress in kx-step.txt
 param([string]$Tip = 'kinfx')
 $ErrorActionPreference = 'Continue'
-$inst = 'C:\Users\KinTest\inst'
+$inst = Join-Path $env:USERPROFILE 'inst'
 function Step($m) { Add-Content "$inst\kx-step.txt" ((Get-Date -f HH:mm:ss) + ' ' + $m) }
 Step 'blur start'
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing

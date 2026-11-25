@@ -1,10 +1,10 @@
 # Install the built 0.1.8 exe (silent, admin) and swap the loaded TIP DLL without a reboot:
 # stop ctfmon (it holds the TIP) + explorer, copy, re-register, redeploy. Writes inst\kx-install8.txt.
 $ErrorActionPreference = 'Continue'
-$inst = 'C:\Users\KinTest\inst'
+$inst = Join-Path $env:USERPROFILE 'inst'
 New-Item -ItemType Directory -Force $inst | Out-Null
 $r = New-Object Collections.ArrayList
-$src = 'C:\Users\KinTest\kx\out'
+$src = Join-Path $env:USERPROFILE 'kx\out'
 $dst = 'C:\Program Files\KINFX Input'
 $exe = "$src\KINFX-Input-0.1.8-Windows-x64.exe"
 [void]$r.Add('exe=' + (Test-Path $exe) + ' size=' + (Get-Item $exe).Length + ' sha=' + (Get-FileHash $exe).Hash)

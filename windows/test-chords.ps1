@@ -1,8 +1,8 @@
 # Bare-modifier chord probe (run via launch.ps1 as the logged-in user).
 # Types vd1 (hao in Chinese, raw "vd1" in English) after each chord, so the mode is visible.
-# Output: C:\Users\KinTest\inst\kx-chords.txt
+# Output: $env:USERPROFILE\inst\kx-chords.txt
 $ErrorActionPreference = 'Continue'
-$inst = 'C:\Users\KinTest\inst'
+$inst = Join-Path $env:USERPROFILE 'inst'
 function Step($m) { Add-Content "$inst\kx-chords-step.txt" ((Get-Date -f HH:mm:ss) + ' ' + $m) }
 Step 'start'
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing

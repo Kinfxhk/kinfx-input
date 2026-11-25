@@ -8,4 +8,4 @@ foreach ($p in Get-Process) {
   } catch {}
 }
 [void]$r.Add('done')
-[IO.File]::WriteAllLines('C:\Users\KinTest\inst\kx-holders8.txt', [string[]]$r.ToArray())
+[IO.File]::WriteAllLines((Join-Path $env:USERPROFILE 'inst\kx-holders8.txt'), [string[]]$r.ToArray())

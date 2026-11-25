@@ -1,6 +1,6 @@
 $r = New-Object Collections.ArrayList
 $dll = 'C:\Program Files\KINFX Input\KINFXInput.dll'
-$src = 'C:\Users\KinTest\kx\out\KINFXInput.dll'
+$src = Join-Path $env:USERPROFILE 'kx\out\KINFXInput.dll'
 $srcHash = (Get-FileHash $src).Hash
 foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'")) {
   [void]$r.Add('ps pid=' + $p.ProcessId + ' start=' + $p.CreationDate + ' cmd=' + ($p.CommandLine -replace "`r?`n", ' '))
@@ -28,4 +28,4 @@ $reg = Start-Process regsvr32 -ArgumentList '/s', "`"$dll`"" -Wait -PassThru
 $d = Start-Process 'C:\Program Files\KINFX Input\KINFXSettings.exe' -ArgumentList '--deploy' -Wait -PassThru
 [void]$r.Add('deploy exit=' + $d.ExitCode)
 [void]$r.Add('data schema=' + (Get-FileHash 'C:\Program Files\KINFX Input\data\build\kinfx_quick.schema.yaml').Hash)
-[IO.File]::WriteAllLines('C:\Users\KinTest\inst\kx-swap8.txt', [string[]]$r.ToArray())
+[IO.File]::WriteAllLines((Join-Path $env:USERPROFILE 'inst\kx-swap8.txt'), [string[]]$r.ToArray())

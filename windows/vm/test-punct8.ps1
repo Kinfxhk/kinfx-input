@@ -2,9 +2,9 @@
 # on the zh-TW VM mis-parses this file when it carries UTF-8 non-ASCII text.
 # Every punctuation key must commit exactly one glyph with NO candidate window (no full/half menu),
 # Shift+Space toggles full shape, plus vd1 / Ctrl+Space / Ctrl+Shift / Ctrl+C+V and the mode badges.
-# Output: C:\Users\KinTest\inst\kx-punct8.txt + kx-shot-*.png
+# Output: $env:USERPROFILE\inst\kx-punct8.txt + kx-shot-*.png
 $ErrorActionPreference = 'Continue'
-$inst = 'C:\Users\KinTest\inst'
+$inst = Join-Path $env:USERPROFILE 'inst'
 function Step($m) { Add-Content "$inst\kx-step8.txt" ((Get-Date -f HH:mm:ss) + ' ' + $m) }
 Step 'start'
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
