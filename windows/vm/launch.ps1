@@ -1,6 +1,7 @@
 param([string]$Script, [string]$Level = 'Limited')
 $name = 'KinfxX' + [guid]::NewGuid().ToString('N').Substring(0, 6)
-$act = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument ('//B //Nologo "C:\Users\KinTest\inst\hidden.vbs" "C:\Users\KinTest\inst\' + $Script + '"')
+$inst = Join-Path $env:USERPROFILE 'inst'
+$act = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument ('//B //Nologo "' + (Join-Path $inst 'hidden.vbs') + '" "' + (Join-Path $inst $Script) + '"')
 $pr = New-ScheduledTaskPrincipal -UserId 'kinai\kintest' -LogonType Interactive -RunLevel $Level
 Register-ScheduledTask -TaskName $name -Action $act -Principal $pr -Force | Out-Null
 Start-ScheduledTask -TaskName $name

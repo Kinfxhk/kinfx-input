@@ -26,4 +26,5 @@ $r.Add(@{app='Edge';prefix=$prefix;oldField=(V $a);newField=(V $b);before=$befor
 }
 }catch{$r.Add(@{app='Edge';status='NOT_RUN';reason=$_.Exception.Message})}
 $r|ConvertTo-Json -Depth 6|Set-Content -Encoding UTF8 C:\QA\external-results.json
-Invoke-WebRequest -UseBasicParsing -Method Post -InFile C:\QA\external-results.json http://192.168.174.1:18768/external-results.json
+$collector = if ($env:QA_COLLECTOR_URL) { $env:QA_COLLECTOR_URL } else { 'http://127.0.0.1:18768/external-results.json' }
+Invoke-WebRequest -UseBasicParsing -Method Post -InFile C:\QA\external-results.json $collector

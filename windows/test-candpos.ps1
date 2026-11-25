@@ -1,9 +1,9 @@
 # Candidate / association window position check. For each app: type vd (preedit list), then vd1
 # (association list after the pick); record the KINFX candidate window rect (class KINFXInputCand)
-# and the screenshot crop. Output: C:\Users\KinTest\inst\kx-pos-<app>.txt + kx-pos-<app>-<n>.png
+# and the screenshot crop. Output: $env:USERPROFILE\inst\kx-pos-<app>.txt + kx-pos-<app>-<n>.png
 param([string]$App = 'notepad')
 $ErrorActionPreference = 'Continue'
-$inst = 'C:\Users\KinTest\inst'
+$inst = Join-Path $env:USERPROFILE 'inst'
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, UIAutomationClient, UIAutomationTypes
 Add-Type @'
 using System; using System.Runtime.InteropServices; using System.Text;

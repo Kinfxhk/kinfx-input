@@ -1,8 +1,8 @@
 # Blur check in Notepad: type through KINFX, then click (A) lower in the same document or (W) on the
-# desktop, come back, read the document with Ctrl+A Ctrl+C. Output: C:\Users\KinTest\inst\kx-np-<ime>.txt
+# desktop, come back, read the document with Ctrl+A Ctrl+C. Output: $env:USERPROFILE\inst\kx-np-<ime>.txt
 param([string]$Ime = 'kinfx')
 $ErrorActionPreference = 'Continue'
-$inst = 'C:\Users\KinTest\inst'
+$inst = Join-Path $env:USERPROFILE 'inst'
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms
 Add-Type @'
 using System; using System.Runtime.InteropServices;

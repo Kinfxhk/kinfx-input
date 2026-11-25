@@ -1,1 +1,1 @@
-& 'C:\Users\KinTest\inst\test-pagesize.ps1' -Size 9
+& (Join-Path $env:USERPROFILE 'inst\test-pagesize.ps1') -Size 9

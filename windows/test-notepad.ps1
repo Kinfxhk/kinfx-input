@@ -1,9 +1,9 @@
 ﻿# Real-key test on the VM desktop (run via kxlaunch.ps1 as the logged-in user).
 # Opens a text box window, switches this process to KINFX Input through TSF, types
 # vd1 Return iPhone Space with SendInput, then saves the text box content and the TIP trace.
-# Output: C:\Users\KinTest\inst\kx-real.txt (progress in kx-step.txt)
+# Output: $env:USERPROFILE\inst\kx-real.txt (progress in kx-step.txt)
 $ErrorActionPreference = 'Continue'
-$inst = 'C:\Users\KinTest\inst'
+$inst = Join-Path $env:USERPROFILE 'inst'
 function Step($m) { Add-Content "$inst\kx-step.txt" ((Get-Date -f HH:mm:ss) + ' ' + $m) }
 Step 'start'
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing

@@ -1,8 +1,8 @@
 # Blur check in Edge: two textareas in a local page, keys through KINFX, mouse click into the
-# second textarea, values read through UIA. Output: C:\Users\KinTest\inst\kx-edge.txt
+# second textarea, values read through UIA. Output: $env:USERPROFILE\inst\kx-edge.txt
 param([string]$Ime = 'kinfx')
 $ErrorActionPreference = 'Continue'
-$inst = 'C:\Users\KinTest\inst'
+$inst = Join-Path $env:USERPROFILE 'inst'
 function Step($m) { Add-Content "$inst\kx-step.txt" ((Get-Date -f HH:mm:ss) + ' edge ' + $m) }
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms
 Add-Type @'

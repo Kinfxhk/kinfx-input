@@ -2,9 +2,9 @@
 # One WinForms text box, KINFX Input activated for this process, SendInput only:
 #   Ctrl+Space, bare Ctrl+Shift (both release orders), bare Alt+Shift, lone Ctrl,
 #   Ctrl+Shift+P (must not toggle), Ctrl+C / Ctrl+V, and a switch while a preedit is open.
-# Output: C:\Users\KinTest\inst\kx-mode.txt (progress in kx-mode-step.txt)
+# Output: $env:USERPROFILE\inst\kx-mode.txt (progress in kx-mode-step.txt)
 $ErrorActionPreference = 'Continue'
-$inst = 'C:\Users\KinTest\inst'
+$inst = Join-Path $env:USERPROFILE 'inst'
 function Step($m) { Add-Content "$inst\kx-mode-step.txt" ((Get-Date -f HH:mm:ss) + ' ' + $m) }
 Step 'start'
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing

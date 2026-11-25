@@ -2,9 +2,9 @@
 # Clipboard = PASTE, then for each case: Esc, clear the box, type keys through KINFX (TSF + SendInput),
 # record the text box raw, Esc again and record what stayed committed.
 # Tokens: {SP} {ENTER} {ESC} {CV}=Ctrl+V {S1}=Shift+1; other chars typed literally.
-# Output: C:\Users\KinTest\inst\kx-space.txt (+ kx-space-trace.txt), progress in kx-step.txt
+# Output: $env:USERPROFILE\inst\kx-space.txt (+ kx-space-trace.txt), progress in kx-step.txt
 $ErrorActionPreference = 'Continue'
-$inst = 'C:\Users\KinTest\inst'
+$inst = Join-Path $env:USERPROFILE 'inst'
 function Step($m) { Add-Content "$inst\kx-step.txt" ((Get-Date -f HH:mm:ss) + ' ' + $m) }
 Step 'paste start'
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing

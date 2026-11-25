@@ -7,4 +7,4 @@ $names = @($w.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Auto
   ForEach-Object { $_.Current.ControlType.ProgrammaticName.Replace('ControlType.', '') + ':' + $_.Current.Name })
 $r = @('title=' + $w.Current.Name) + $names
 Stop-Process -Id $p.Id -Force
-[IO.File]::WriteAllLines('C:\Users\KinTest\inst\kx-ui.txt', [string[]]$r, (New-Object Text.UTF8Encoding($false)))
+[IO.File]::WriteAllLines((Join-Path $env:USERPROFILE 'inst\kx-ui.txt'), [string[]]$r, (New-Object Text.UTF8Encoding($false)))

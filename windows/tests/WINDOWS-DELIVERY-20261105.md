@@ -10,7 +10,7 @@ Branch: fix/windows-interaction-20261105
 - Rejected blur locks do not queue potentially stale writes. They leave existing document preedit for the host. This fallback is NOT fully acceptance tested.
 
 ## Verified VM execution
-VM: C:/Users/kinfx/專案/ime-vm-qa/Win11-IME-QA/Win11-IME-QA.vmx
+VM: <host-projects>/ime-vm-qa/Win11-IME-QA/Win11-IME-QA.vmx
 Guest: Win11 10.0.26300; MSVC Build Tools 17.14.44, toolset14.44.35207 installed inside VM only.
 Final tested DLL SHA256 FA15A50065C9356885FEFADA2156753CC6CC4EFDA067F4981E26FFDCB28A7065; version remains0.1.10 (development build, not released).
 
@@ -30,7 +30,7 @@ Final tested DLL SHA256 FA15A50065C9356885FEFADA2156753CC6CC4EFDA067F4981E26FFDC
 - No host IME installed/deployed/registry modified; no host reboot/logoff/data clearing. All installation/registration/selftests restricted to guest. VM retained.
 
 ## Evidence root
-C:/Users/kinfx/專案/ime-vm-qa/results/
+<host-projects>/ime-vm-qa/results/
 - base-focus-results.json,base-focus-meta.json
 - final-focus-results.json,final-focus-meta.json
 - minimal.json (final DLL hash and both fields)
@@ -41,4 +41,4 @@ C:/Users/kinfx/專案/ime-vm-qa/results/
 - fixed-installed.json (may refer prior development binary; final hash provenance in repeat metadata/minimal)
 - edge-live.json (exploratory only)
 
-Absolute evidence paths and bundle are listed in C:/HermesHub/_inbox/kinfx-ime-windows-delivery.json. Mac is integration/release owner. This bundle is a partial verified fix, not release approval.
+Absolute evidence paths and bundle are listed in <HERMES_HOME>/_inbox/kinfx-ime-windows-delivery.json. Mac is integration/release owner. This bundle is a partial verified fix, not release approval.

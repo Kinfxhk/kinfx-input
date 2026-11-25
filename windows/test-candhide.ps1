@@ -3,9 +3,9 @@
 # hides its window (reported 2026-10-27: a WebView2 panel / launcher host left the list floating).
 # Steps use the association list (vd1, no composition) so a composition-terminated callback cannot
 # be what hides the window; step 5 types again to prove the IME still shows the list afterwards.
-# Output: C:\Users\KinTest\inst\kx-candhide.txt (one line per step, written as it happens)
+# Output: $env:USERPROFILE\inst\kx-candhide.txt (one line per step, written as it happens)
 $ErrorActionPreference = 'Continue'
-$inst = 'C:\Users\KinTest\inst'
+$inst = Join-Path $env:USERPROFILE 'inst'
 $out = "$inst\kx-candhide.txt"
 Set-Content -Path $out -Value '' -Encoding UTF8
 function Step($m) { Add-Content "$inst\kx-step.txt" ((Get-Date -f HH:mm:ss) + ' candhide ' + $m) }

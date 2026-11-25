@@ -12,4 +12,4 @@ Remove-ItemProperty $p -Name PendingFileRenameOperations -ErrorAction SilentlyCo
 $after = (Get-ItemProperty $p -Name PendingFileRenameOperations -ErrorAction SilentlyContinue).PendingFileRenameOperations
 [void]$r.Add('pending after=' + @($after).Count + ' dll=' + (Get-FileHash "$d\KINFXInput.dll").Hash + ' ver=' + (Get-Item "$d\KINFXInput.dll").VersionInfo.FileVersion)
 [void]$r.Add('leftovers=' + @(Get-ChildItem $d -Filter 'is-*.tmp').Count)
-[IO.File]::WriteAllLines('C:\Users\KinTest\inst\kx-pending8.txt', [string[]]$r.ToArray())
+[IO.File]::WriteAllLines((Join-Path $env:USERPROFILE 'inst\kx-pending8.txt'), [string[]]$r.ToArray())
