@@ -10,11 +10,15 @@ class CandidatePlacement(unittest.TestCase):
         self.assertIn('#include "cand-place.h"', SRC)
 
     def test_show_uses_place_candidate(self):
-        # 2026-11-07: Show's placement moved into the pure kx::FitCandidates (re-flow before the
-        # final size, Mac review P2 round 2); the >=5 tall-list rule moved with it.
+        # 2026-11-22: Default placement anchors below the caret line (preferAbove = false, matching
+        # Windows Quick & macOS CandidatePanelGeometry) so candidate/association popups expand downward
+        # without top-edge jumping or right-of-caret line occlusion; Show queries monitor DPI via
+        # TargetDpi without a preliminary SetWindowPos flicker.
         self.assertIn('kx::FitCandidates(widths, vertical_, caretLine, area, geom, &cells_,', SRC)
         self.assertIn('pageSize, stick ? stickyHow_ : -1)', SRC)
-        self.assertIn('const bool preferAbove = vertical && pageSize >= 5;', HDR)
+        self.assertIn('const bool preferAbove = false;', HDR)
+        self.assertNotIn('SWP_NOSIZE | SWP_NOACTIVATE', SRC)
+        self.assertIn('int dpi = TargetDpi(hwnd_, hmon);', SRC)
         self.assertIn('PlaceCandidate(caret, W + e, refH, area, g.gap, preferAbove, &refHow)', HDR)
         self.assertIn('PlaceCandidate(caret, W + e, H + e, area, g.gap, preferAbove, how, side)', HDR)
         self.assertIn('Show({s}, at, 20, true, 1)', SRC)

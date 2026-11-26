@@ -114,10 +114,13 @@ class CandWin {
     KillTimer(hwnd_, 1);  // ... and the hint's 400 ms timer must not hide the list later
     items_ = items;
     vertical_ = vertical;
-    // The window lives in the host app's thread: GetDpiForWindow is 96 in DPI-unaware apps (Windows
-    // stretches the window itself), the system DPI in system-aware ones, the monitor's in per-monitor ones.
-    SetWindowPos(hwnd_, HWND_TOPMOST, at.x, at.y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
-    int dpi = (int)GetDpiForWindow(hwnd_);
+    // Query DPI directly from the target monitor without moving the visible window first: a probe
+    // SetWindowPos to (at.x, at.y) followed by a second SetWindowPos to the placed rect made the
+    // visible candidate window jump/flicker on every keystroke. DPI-unaware threads stay at 96 so
+    // Windows bitmap-stretches the window once; system-aware threads use GetDpiForSystem();
+    // per-monitor DPI-aware threads use the target monitor's effective DPI via Shcore.
+    HMONITOR hmon = MonitorFromPoint(at, MONITOR_DEFAULTTONEAREST);
+    int dpi = TargetDpi(hwnd_, hmon);
     if (dpi != dpi_ || !font_) {
       if (font_) DeleteObject(font_);
       dpi_ = dpi;
@@ -146,20 +149,15 @@ class CandWin {
     cells_ = kx::LayoutCells(widths, lineH_, vertical_, 1 << 30, 1 << 30, geom.padX, geom.padY, geom.gapX, &ww, &wh);
     ww += 2 * inset; wh += 2 * inset;
     MONITORINFO mi = {sizeof mi};
-    if (GetMonitorInfoW(MonitorFromPoint(at, MONITOR_DEFAULTTONEAREST), &mi)) {
+    if (GetMonitorInfoW(hmon, &mi)) {
       RECT wa = mi.rcWork;
-      // A tall vertical list below the caret reaches the next input of Qt/Electron forms, whose
-      // fields are not separate windows: a click meant for that field picks a candidate instead
-      // (x46: "vd" + click lower field -> upper field "妹好", lower field never focused). Tall
-      // lists go above the text line when the configured page holds 5 or more (x46), not when the
-      // current page happens to; short pages stay below. A list that fits neither way becomes one
-      // row, and it never covers the line being typed. While the panel stays visible on the same
-      // caret line, the last side is kept if that side still fits (count changes must not flip it).
       const kx::Rect area{wa.left, wa.top, wa.right, wa.bottom};
       const kx::Rect caretLine{at.x, at.y - 2 - lineAbove, at.x + 8, at.y - 2};
       const bool sameLine = stickyHow_ == 0 || stickyHow_ == 1 || stickyHow_ == 2;
+      // Allow up to 8 px vertical tolerance across preedit GetTextExt vs post-commit GetSelection
+      // (association popup) so same-line candidate transitions never drop sticky side.
       const bool stick = hwnd_ && IsWindowVisible(hwnd_) && sameLine &&
-                         abs(caretLine.top - stickyTop_) <= 2 && abs(caretLine.bottom - stickyBottom_) <= 2;
+                         abs(caretLine.top - stickyTop_) <= 8 && abs(caretLine.bottom - stickyBottom_) <= 8;
       // A list that fits neither above nor below is re-flowed (one row first, then wrapped rows or
       // columns) inside the real room on one side of the caret; see kx::FitCandidates.
       POINT at2 = at;
@@ -190,7 +188,12 @@ class CandWin {
         stickyHow_ = -1;
       }
     }
-    SetWindowPos(hwnd_, HWND_TOPMOST, at.x, at.y, ww, wh, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    RECT cur = {};
+    const bool alreadyPlaced = IsWindowVisible(hwnd_) && GetWindowRect(hwnd_, &cur) &&
+                               cur.left == at.x && cur.top == at.y &&
+                               (cur.right - cur.left) == ww && (cur.bottom - cur.top) == wh;
+    if (!alreadyPlaced)
+      SetWindowPos(hwnd_, HWND_TOPMOST, at.x, at.y, ww, wh, SWP_NOACTIVATE | SWP_SHOWWINDOW);
     // Some hosts (WebView2 panels such as Raycast's search, browser popups) hide their window
     // without a TSF focus change, so OnSetFocus(FALSE) never arrives and this topmost list stays
     // on screen over other apps (reported 2026-10-27). While the list is visible, watch the
@@ -329,6 +332,20 @@ class CandWin {
   int stickyTop_ = 0, stickyBottom_ = 0;  // caret line that side was chosen for
   static const int kFontPx = 24;  // px at 96 DPI (0.1.3: a fixed 18 px, never DPI-scaled)
   int S(int px) const { return MulDiv(px, dpi_ ? dpi_ : 96, 96); }
+  static int TargetDpi(HWND hwnd, HMONITOR hmon) {
+    DPI_AWARENESS aw = GetAwarenessFromDpiAwarenessContext(GetThreadDpiAwarenessContext());
+    if (aw == DPI_AWARENESS_UNAWARE) return 96;
+    if (aw == DPI_AWARENESS_SYSTEM_AWARE) return (int)GetDpiForSystem();
+    if (hmon) {
+      static HMODULE shcore = LoadLibraryW(L"Shcore.dll");
+      typedef HRESULT(WINAPI * GetDpiForMonitorFn)(HMONITOR, int, UINT *, UINT *);
+      static auto fn = shcore ? (GetDpiForMonitorFn)GetProcAddress(shcore, "GetDpiForMonitor") : nullptr;
+      UINT dx = 0, dy = 0;
+      if (fn && SUCCEEDED(fn(hmon, 0 /* MDT_EFFECTIVE_DPI */, &dx, &dy)) && dx > 0) return (int)dx;
+    }
+    int d = hwnd ? (int)GetDpiForWindow(hwnd) : 96;
+    return d > 0 ? d : 96;
+  }
 };
 
 // ---------- edit session helper ----------
@@ -442,7 +459,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   }
   STDMETHODIMP OnTestKeyDown(ITfContext *c, WPARAM w, LPARAM l, BOOL *eaten) override {
     EnsureContext(c);
-    *eaten = Process(w, l, false);
+    *eaten = Process(w, l, false, true);
     Tail(c);
     // Paste: claim it here so OnKeyDown runs (sync edit session commits the held text), then OnKeyDown passes it to the app.
     if (paste_) *eaten = TRUE;
@@ -450,7 +467,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   }
   STDMETHODIMP OnTestKeyUp(ITfContext *c, WPARAM w, LPARAM l, BOOL *eaten) override {
     EnsureContext(c);
-    *eaten = Process(w, l, true);
+    *eaten = Process(w, l, true, true);
     Tail(c);
     return S_OK;
   }
@@ -541,8 +558,8 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
 
   void ResetInput() {
     ++generation_;
-    pending_ = pendUp_ = pendEaten_ = paste_ = switch_ = hint_ = cands_ = newline_ = newlineExt_ = endFailed_ = commitWritten_ = commitFailed_ = false;
-    pendW_ = 0;
+    pending_ = pendUp_ = pendEaten_ = paste_ = switch_ = unclaimedFlush_ = hint_ = cands_ = newline_ = newlineExt_ = endFailed_ = commitWritten_ = commitFailed_ = false;
+    pendW_ = 0; pendTime_ = 0;
     chord_ = KxChord();
     last_ = POINT{-1, -1}; lastH_ = 0;
     cand_.Hide(true);
@@ -667,18 +684,24 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   // eaten test), so the commit and the hint have to happen right there: an open preedit would
   // otherwise be cancelled by the app and the typed text lost.
   void Tail(ITfContext *c) {
-    if (!switch_) return;
+    if (!switch_ && !unclaimedFlush_) return;
     switch_ = false;
+    unclaimedFlush_ = false;
     Update(c);
     if (hint_) { hint_ = false; ShowHint(); }
   }
 
-  bool Process(WPARAM w, LPARAM l, bool up) {
-    // The remembered result belongs to the On* call that follows its OnTest* — and an eaten switch
-    // gets none (TSF stops after the test), so a pending Ctrl+Space must not answer the next one.
+  bool Process(WPARAM w, LPARAM l, bool up, bool isTest = false) {
+    // The remembered result belongs to the On* call that follows its OnTest*. Some TSF/CUAS/Chromium
+    // hosts query OnTestKeyDown twice for the same physical key event before calling OnKeyDown: a
+    // repeat OnTest* within the same message/tick must return pendEaten_ idempotently WITHOUT
+    // clearing pending_, or the subsequent OnKeyDown would run kx_key() a second time (double input).
+    // Conversely, keys with eaten == false (unless paste_ claimed them) never always get OnKeyDown,
+    // so only claimed keys arm pending_.
+    const DWORD msgTime = (DWORD)GetMessageTime();
     if (pending_) {
-      bool same = pendW_ == w && pendUp_ == up;
-      pending_ = false;
+      bool same = pendW_ == w && pendUp_ == up && (!isTest || msgTime - pendTime_ <= 50);
+      if (!same || !isTest) pending_ = false;
       if (same) return pendEaten_;
     }
     newline_ = false;  // only the key that set it (test + real call of one Return) may use it
@@ -704,7 +727,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
     if (chord || (toggle && !up)) {
       eaten = ToggleAscii();
       switch_ = true;  // committed and hinted in Tail: this key never reaches OnKeyDown
-      pending_ = true; pendW_ = w; pendUp_ = up; pendEaten_ = eaten;
+      if (isTest && eaten) { pending_ = true; pendW_ = w; pendUp_ = up; pendEaten_ = eaten; pendTime_ = msgTime; }
     } else if (sym && (paste || !(mask & (kControl | kAlt))) && Session() && (!up || modKey)) {
       int m = modKey ? mask & ~kShift : mask;  // Rime gets the Shift key itself, not Shift as a modifier
       // 全形/半形 is held user-wide: another app's Shift+Space, or this app's new session (the
@@ -723,7 +746,12 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
       // key_bindings: Shift+space toggles full_shape (the Ctrl chords never reach Rime here).
       if (kx::NoteShape(sess_, sym == 0x20 && (m & kShift) && !up)) Trace("shape held");
       Trace("key sym=" + std::to_string(sym) + " m=" + std::to_string(m) + (up ? " up" : "") + " eaten=" + (eaten ? "1" : "0"));
-      pending_ = true; pendW_ = w; pendUp_ = up; pendEaten_ = eaten;
+      if (isTest && (eaten || paste_)) { pending_ = true; pendW_ = w; pendUp_ = up; pendEaten_ = eaten; pendTime_ = msgTime; }
+      else if (isTest && !eaten) {
+        // Uneaten keys that flushed Rime state (e.g. Return closing association list, or punctuation
+        // passed through) may not receive OnKeyDown in some TSF hosts; flush document/hide list in Tail.
+        unclaimedFlush_ = true;
+      }
     }
     return eaten;
   }
@@ -1131,6 +1159,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   KxChord chord_;
   bool hint_ = false;  // a mode switch is waiting to be shown after the next Update
   bool switch_ = false;  // a mode switch happened in the test path: Tail() commits it
+  bool unclaimedFlush_ = false;  // uneaten key touched Rime in OnTest*: flush document/hide list in Tail()
   bool pending_ = false, pendUp_ = false, pendEaten_ = false, paste_ = false;
   bool newline_ = false, newlineExt_ = false;  // claimed Return: FinishNewline re-sends it after the commit
   bool endFailed_ = false;  // the host refused EndComposition since the claim
@@ -1138,6 +1167,7 @@ class Tip : public ITfTextInputProcessorEx, public ITfKeyEventSink, public ITfCo
   static constexpr LPARAM kNewlineTag = 0x4B584E4C;  // 'KXNL' in dwExtraInfo: our own re-sent Return
   bool cands_ = false;  // candidates (incl. the association list) were showing on the last update
   WPARAM pendW_ = 0;
+  DWORD pendTime_ = 0;
 };
 
 // ---------- COM plumbing ----------
